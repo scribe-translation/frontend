@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import Typography from '../UI/Typography'
-import { Paper, Chip, Button, Box, useMediaQuery, useTheme, CircularProgress, TextField, IconButton, Tooltip } from '@mui/material'
+import { Paper, Chip, Button, Box, useMediaQuery, useTheme, CircularProgress, TextField, IconButton, Tooltip, Snackbar, Alert } from '@mui/material'
 import OutputLanguageSelector from '../OutputLanguageSelector'
 import { GoogleCTLanguageCode, getCTLanguageInfo, isValidCTLanguageCode } from '../../enums/googleCTLangs'
 import { isTTSSupported } from '../../enums/googleTTSLangs'
@@ -424,6 +424,13 @@ function TranslationApp() {
   const [isConnected, setIsConnected] = useState(false)
   const [isConnecting, setIsConnecting] = useState(false)
   const [showLanguageSelection, setShowLanguageSelection] = useState(true)
+  const [connectionQuality, setConnectionQuality] = useState<'good' | 'unstable' | 'disconnected'>('good')
+  
+  // Connection health monitoring refs
+  const lastPongTimeRef = useRef<number>(Date.now())
+  const missedPongCountRef = useRef<number>(0)
+  const awaitingPongRef = useRef<boolean>(false)
+  const visibilityHiddenTimeRef = useRef<number | null>(null)
   
   // Keep ref in sync with state for socket handlers
   useEffect(() => {
@@ -519,6 +526,12 @@ function TranslationApp() {
     socketRef.current.on('connect', () => {
       setIsConnecting(false)
       setIsConnected(true)
+      setConnectionQuality('good')
+      
+      // Reset connection health tracking
+      lastPongTimeRef.current = Date.now()
+      missedPongCountRef.current = 0
+      awaitingPongRef.current = false
       
       // Only re-establish target language if user has already joined (not on landing page)
       // Use refs to avoid stale closure issues
@@ -529,14 +542,36 @@ function TranslationApp() {
         socketRef.current?.emit('setTargetLanguage', { targetLanguage: currentTargetLanguage })
       }
       
-      // Set up heartbeat to keep connection alive
+      // Aggressive heartbeat mechanism - ping every 5 seconds for faster detection
       const heartbeatInterval = setInterval(() => {
         if (socketRef.current?.connected) {
+          // Check if previous pong was received
+          if (awaitingPongRef.current) {
+            missedPongCountRef.current++
+            console.warn(`⚠️ Missed pong #${missedPongCountRef.current}`)
+            
+            // 2 missed pongs (10s) = unstable connection
+            if (missedPongCountRef.current >= 2) {
+              setConnectionQuality('unstable')
+            }
+            
+            // 3 missed pongs (15s) = force reconnection before server timeout
+            if (missedPongCountRef.current >= 3) {
+              console.error('❌ Connection appears dead (3 missed pongs), forcing reconnection...')
+              setConnectionQuality('disconnected')
+              // Force disconnect to trigger reconnection
+              socketRef.current?.disconnect()
+              return
+            }
+          }
+          
+          // Send ping and mark as awaiting pong
+          awaitingPongRef.current = true
           socketRef.current.emit('ping')
         } else {
           clearInterval(heartbeatInterval)
         }
-      }, 25000) // Send ping every 25 seconds (server timeout is 60s)
+      }, 5000) // Send ping every 5 seconds for aggressive detection
       
       ;(socketRef.current as any).heartbeatInterval = heartbeatInterval
     })
@@ -694,7 +729,22 @@ function TranslationApp() {
     })
 
     socketRef.current.on('pong', () => {
-      console.log('💓 TranslationApp received pong from server')
+      // Track successful pong - connection is healthy
+      lastPongTimeRef.current = Date.now()
+      awaitingPongRef.current = false
+      
+      // Clear visibility verification timeout if pending
+      if ((socketRef.current as any)?.visibilityVerifyTimeout) {
+        clearTimeout((socketRef.current as any).visibilityVerifyTimeout)
+        ;(socketRef.current as any).visibilityVerifyTimeout = null
+      }
+      
+      // Reset missed count and quality on successful pong
+      if (missedPongCountRef.current > 0) {
+        console.log('✅ Connection recovered, pong received')
+        missedPongCountRef.current = 0
+        setConnectionQuality('good')
+      }
     })
 
     return () => {
@@ -708,6 +758,53 @@ function TranslationApp() {
       setIsConnected(false)
     }
   }, [targetLanguage, userCode]) // Removed showLanguageSelection - we don't need to reconnect when it changes
+
+  // Visibility change handler - verify connection when app returns from background
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        // App going to background - record time
+        visibilityHiddenTimeRef.current = Date.now()
+      } else if (document.visibilityState === 'visible') {
+        // App returning to foreground
+        const hiddenDuration = visibilityHiddenTimeRef.current 
+          ? Date.now() - visibilityHiddenTimeRef.current 
+          : 0
+        visibilityHiddenTimeRef.current = null
+        
+        console.log(`👁️ App foregrounded after ${Math.round(hiddenDuration / 1000)}s`)
+        
+        // If socket exists, verify connection immediately
+        if (socketRef.current) {
+          // Send immediate ping to verify connection
+          awaitingPongRef.current = true
+          socketRef.current.emit('ping')
+          
+          // If no pong received within 3 seconds, force reconnect
+          const verifyTimeout = setTimeout(() => {
+            if (awaitingPongRef.current && socketRef.current) {
+              console.error('❌ No pong after foregrounding, forcing reconnection...')
+              setConnectionQuality('disconnected')
+              socketRef.current.disconnect()
+            }
+          }, 3000)
+          
+          // Store timeout so it can be cleared if pong arrives
+          ;(socketRef.current as any).visibilityVerifyTimeout = verifyTimeout
+        }
+      }
+    }
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      // Clear any pending verification timeout
+      if (socketRef.current && (socketRef.current as any).visibilityVerifyTimeout) {
+        clearTimeout((socketRef.current as any).visibilityVerifyTimeout)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     if (socketRef.current && isConnected && targetLanguage && !showLanguageSelection) {
@@ -1079,6 +1176,21 @@ function TranslationApp() {
           </BubblesContainer>
         </RightPanelContent>
       </RightPanel>
+      
+      {/* Connection quality warning */}
+      <Snackbar
+        open={connectionQuality === 'unstable'}
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+        sx={{ top: { xs: 70, sm: 24 } }}
+      >
+        <Alert 
+          severity="warning" 
+          variant="filled"
+          sx={{ borderRadius: '1rem' }}
+        >
+          Connection unstable - attempting to recover...
+        </Alert>
+      </Snackbar>
     </MainContainer>
   )
 }

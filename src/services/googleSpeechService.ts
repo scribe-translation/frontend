@@ -54,6 +54,7 @@ class GoogleSpeechService {
   private lastSpeechTime: number = 0; // Track when speech was last detected
   private silenceStartTime: number | null = null; // Track when silence started
   private lastInterimResultTime: number = 0; // Track when we last received an interim result from Google Cloud
+  private streamHealthCheckInterval: NodeJS.Timeout | null = null; // For detecting hung streams
 
   constructor() {
     this.config = {
@@ -408,6 +409,9 @@ class GoogleSpeechService {
       // Start silence detection for automatic finalization
       this.startSilenceDetection();
       
+      // Start stream health check to detect hung streams
+      this.startStreamHealthCheck();
+      
       // Start keep-alive mechanism to prevent audio timeout
       this.startKeepAlive();
       this.lastAudioSentTime = Date.now();
@@ -438,6 +442,9 @@ class GoogleSpeechService {
     
     // Stop silence detection
     this.stopSilenceDetection();
+    
+    // Stop stream health check
+    this.stopStreamHealthCheck();
     
     // Stop keep-alive mechanism
     this.stopKeepAlive();
@@ -545,6 +552,7 @@ class GoogleSpeechService {
     this.clearMessageQueue();
     this.stopKeepAlive();
     this.stopSilenceDetection();
+    this.stopStreamHealthCheck();
 
     // Notify backend to stop streaming
     if (this.socket) {
@@ -877,6 +885,56 @@ class GoogleSpeechService {
     if (this.audioLevelInterval) {
       clearInterval(this.audioLevelInterval);
       this.audioLevelInterval = null;
+    }
+  }
+
+  /**
+   * Start stream health check to detect hung streams
+   * If we're actively speaking but not receiving any interim results, the stream may be dead
+   */
+  private startStreamHealthCheck(): void {
+    if (!this.socket) {
+      return;
+    }
+    
+    const STREAM_HUNG_TIMEOUT = 15000; // 15 seconds without interim results while speaking = hung
+    const CHECK_INTERVAL = 5000; // Check every 5 seconds
+    
+    const healthCheck = () => {
+      if (!this.isRecording) {
+        return;
+      }
+      
+      const now = Date.now();
+      const timeSinceLastInterim = now - this.lastInterimResultTime;
+      const timeSinceLastSpeech = now - this.lastSpeechTime;
+      
+      // If we've been speaking recently (within 5 seconds) but haven't received
+      // any interim results for 15+ seconds, the stream is likely hung
+      if (timeSinceLastSpeech < 5000 && timeSinceLastInterim > STREAM_HUNG_TIMEOUT) {
+        console.warn(`⚠️ Stream appears hung: ${Math.round(timeSinceLastInterim / 1000)}s since last interim result while speech is active`);
+        
+        // Request stream restart from backend
+        if (this.socket?.connected) {
+          console.log('🔄 Requesting stream restart due to hung detection...');
+          this.socket.emit('requestStreamRestart', { reason: 'hung_detection' });
+        }
+        
+        // Reset the timer so we don't spam restart requests
+        this.lastInterimResultTime = now;
+      }
+    };
+    
+    this.streamHealthCheckInterval = setInterval(healthCheck, CHECK_INTERVAL);
+  }
+
+  /**
+   * Stop stream health check
+   */
+  private stopStreamHealthCheck(): void {
+    if (this.streamHealthCheckInterval) {
+      clearInterval(this.streamHealthCheckInterval);
+      this.streamHealthCheckInterval = null;
     }
   }
 

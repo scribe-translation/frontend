@@ -277,6 +277,7 @@ function InputApp() {
   })
   const [isServiceReady, setIsServiceReady] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [connectionQuality, setConnectionQuality] = useState<'good' | 'unstable' | 'disconnected'>('good')
   const socketRef = React.useRef<Socket | null>(null)
   const timeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   const qrCodeRef = useRef<HTMLDivElement>(null)
@@ -284,6 +285,14 @@ function InputApp() {
   const sourceLanguageRef = React.useRef<string>('en-CA') // Ref to track source language for stream restart handler
   const pendingTranscriptionRef = React.useRef<{ id: string; text: string; sourceLanguage: string; timestamp: number } | null>(null) // For pending transcription during overlap
   const pendingPromotionTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null) // Timeout to promote pending transcription
+  
+  // Connection health monitoring refs
+  const lastPongTimeRef = React.useRef<number>(Date.now())
+  const missedPongCountRef = React.useRef<number>(0)
+  const awaitingPongRef = React.useRef<boolean>(false)
+  const visibilityHiddenTimeRef = React.useRef<number | null>(null)
+  const wasStreamingBeforeDisconnectRef = React.useRef<boolean>(false) // Track streaming state for auto-resume
+  const isTranslatingRef = React.useRef<boolean>(false) // Ref to track isTranslating for socket handlers
   const { user, tokens, logout, updateTokens, getConnectionInfo } = useAuth()
   const { userCode, setUserCode, clearUserCode } = useUserCode()
   const theme = useTheme()
@@ -300,6 +309,10 @@ function InputApp() {
   useEffect(() => {
     sourceLanguageRef.current = sourceLanguage
   }, [sourceLanguage])
+
+  useEffect(() => {
+    isTranslatingRef.current = isTranslating
+  }, [isTranslating])
 
   useEffect(() => {
     if (tokens && user && user.userCode) {
@@ -361,7 +374,13 @@ function InputApp() {
     socketRef.current.on('connect', () => {
       setIsSocketConnecting(false)
       setIsSocketConnected(true)
+      setConnectionQuality('good')
       socketRef.current?.emit('getConnectionCount')
+      
+      // Reset connection health tracking
+      lastPongTimeRef.current = Date.now()
+      missedPongCountRef.current = 0
+      awaitingPongRef.current = false
       
       const intervalId = setInterval(() => {
         if (socketRef.current?.connected) {
@@ -373,14 +392,36 @@ function InputApp() {
       
       ;(socketRef.current as any).connectionCountInterval = intervalId
       
-      // Set up heartbeat mechanism - more frequent for better connection detection
+      // Aggressive heartbeat mechanism - ping every 5 seconds for faster detection
       const heartbeatInterval = setInterval(() => {
         if (socketRef.current?.connected) {
+          // Check if previous pong was received
+          if (awaitingPongRef.current) {
+            missedPongCountRef.current++
+            console.warn(`⚠️ Missed pong #${missedPongCountRef.current}`)
+            
+            // 2 missed pongs (10s) = unstable connection
+            if (missedPongCountRef.current >= 2) {
+              setConnectionQuality('unstable')
+            }
+            
+            // 3 missed pongs (15s) = force reconnection before server timeout
+            if (missedPongCountRef.current >= 3) {
+              console.error('❌ Connection appears dead (3 missed pongs), forcing reconnection...')
+              setConnectionQuality('disconnected')
+              // Force disconnect to trigger reconnection
+              socketRef.current?.disconnect()
+              return
+            }
+          }
+          
+          // Send ping and mark as awaiting pong
+          awaitingPongRef.current = true
           socketRef.current.emit('ping')
         } else {
           clearInterval(heartbeatInterval)
         }
-      }, 10000) // Send ping every 10 seconds (more frequent for reliability)
+      }, 5000) // Send ping every 5 seconds for aggressive detection
       
       ;(socketRef.current as any).heartbeatInterval = heartbeatInterval
     })
@@ -390,8 +431,14 @@ function InputApp() {
     })
 
     socketRef.current.on('disconnect', (reason) => {
+      console.log(`🔌 InputApp disconnected: ${reason}, wasStreaming: ${isTranslatingRef.current}`)
+      
+      // Track if we were streaming for auto-resume on reconnect (use ref to avoid stale closure)
+      wasStreamingBeforeDisconnectRef.current = isTranslatingRef.current
+      
       setIsSocketConnecting(false)
       setIsSocketConnected(false)
+      setConnectionQuality('disconnected')
       
       // Clear intervals
       if ((socketRef.current as any)?.connectionCountInterval) {
@@ -409,14 +456,30 @@ function InputApp() {
     })
 
     socketRef.current.on('reconnect', async (attemptNumber) => {
+      console.log(`🔄 InputApp reconnected after ${attemptNumber} attempts, wasStreaming: ${wasStreamingBeforeDisconnectRef.current}`)
       setIsSocketConnecting(false)
       setIsSocketConnected(true)
+      setConnectionQuality('good')
+      
+      // Reset connection health tracking
+      lastPongTimeRef.current = Date.now()
+      missedPongCountRef.current = 0
+      awaitingPongRef.current = false
       
       // Re-initialize Google Speech Service with the reconnected socket
       try {
         await googleSpeechService.initialize(socketRef.current)
+        
+        // Auto-resume streaming if we were streaming before disconnect
+        if (wasStreamingBeforeDisconnectRef.current) {
+          console.log('🎤 Auto-resuming streaming after reconnection...')
+          wasStreamingBeforeDisconnectRef.current = false // Reset flag
+          // Use shouldBeListening to trigger re-start through existing effect
+          setShouldBeListening(true)
+        }
       } catch (error) {
         console.error('❌ Failed to re-initialize Google Speech Service:', error)
+        wasStreamingBeforeDisconnectRef.current = false // Reset flag on error
       }
     })
 
@@ -461,6 +524,22 @@ function InputApp() {
     })
 
     socketRef.current.on('pong', () => {
+      // Track successful pong - connection is healthy
+      lastPongTimeRef.current = Date.now()
+      awaitingPongRef.current = false
+      
+      // Clear visibility verification timeout if pending
+      if ((socketRef.current as any)?.visibilityVerifyTimeout) {
+        clearTimeout((socketRef.current as any).visibilityVerifyTimeout)
+        ;(socketRef.current as any).visibilityVerifyTimeout = null
+      }
+      
+      // Reset missed count and quality on successful pong
+      if (missedPongCountRef.current > 0) {
+        console.log('✅ Connection recovered, pong received')
+        missedPongCountRef.current = 0
+        setConnectionQuality('good')
+      }
     })
 
     // Listen for pre-emptive stream restart (overlap transition - 5 seconds before actual restart)
@@ -580,6 +659,53 @@ function InputApp() {
       setIsSocketConnected(false)
     }
   }, [tokens, userCode])
+
+  // Visibility change handler - verify connection when app returns from background
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        // App going to background - record time
+        visibilityHiddenTimeRef.current = Date.now()
+      } else if (document.visibilityState === 'visible') {
+        // App returning to foreground
+        const hiddenDuration = visibilityHiddenTimeRef.current 
+          ? Date.now() - visibilityHiddenTimeRef.current 
+          : 0
+        visibilityHiddenTimeRef.current = null
+        
+        console.log(`👁️ App foregrounded after ${Math.round(hiddenDuration / 1000)}s`)
+        
+        // If socket exists, verify connection immediately
+        if (socketRef.current) {
+          // Send immediate ping to verify connection
+          awaitingPongRef.current = true
+          socketRef.current.emit('ping')
+          
+          // If no pong received within 3 seconds, force reconnect
+          const verifyTimeout = setTimeout(() => {
+            if (awaitingPongRef.current && socketRef.current) {
+              console.error('❌ No pong after foregrounding, forcing reconnection...')
+              setConnectionQuality('disconnected')
+              socketRef.current.disconnect()
+            }
+          }, 3000)
+          
+          // Store timeout so it can be cleared if pong arrives
+          ;(socketRef.current as any).visibilityVerifyTimeout = verifyTimeout
+        }
+      }
+    }
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      // Clear any pending verification timeout
+      if (socketRef.current && (socketRef.current as any).visibilityVerifyTimeout) {
+        clearTimeout((socketRef.current as any).visibilityVerifyTimeout)
+      }
+    }
+  }, [])
 
   // Initialize Google Cloud Speech-to-Text service when socket is connected
   useEffect(() => {
@@ -1336,6 +1462,21 @@ function InputApp() {
           sx={{ borderRadius: '1rem' }}
         >
           {errorMessage}
+        </Alert>
+      </Snackbar>
+      
+      {/* Connection quality warning */}
+      <Snackbar
+        open={connectionQuality === 'unstable'}
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+        sx={{ top: { xs: 70, sm: 24 } }}
+      >
+        <Alert 
+          severity="warning" 
+          variant="filled"
+          sx={{ borderRadius: '1rem' }}
+        >
+          Connection unstable - attempting to recover...
         </Alert>
       </Snackbar>
     </MainContainer>

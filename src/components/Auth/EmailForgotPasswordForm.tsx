@@ -110,7 +110,7 @@ const EmailForgotPasswordForm: React.FC<EmailForgotPasswordFormProps> = ({
 
   const handlePasswordReset = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!newPassword || !confirmPassword) {
       setError('Please fill in all fields');
       return;
@@ -135,8 +135,8 @@ const EmailForgotPasswordForm: React.FC<EmailForgotPasswordFormProps> = ({
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ 
-          token, 
+        body: JSON.stringify({
+          token,
           password: newPassword
         }),
       });

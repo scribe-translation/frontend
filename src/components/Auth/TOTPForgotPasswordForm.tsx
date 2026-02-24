@@ -29,20 +29,18 @@ const TOTPContainer = styled.div`
   justify-content: center;
   height: 100%;
   width: 100%;
-  padding: 2rem;
-  gap: 3rem;
 `
 
 const TOTPCard = styled(Paper)`
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 4rem 3rem;
+  padding: 1rem 1rem;
   border-radius: 2rem;
   max-width: 95%;
   width: 30rem;
   max-height: 90%;
-  gap: 2.5rem;
+  gap: 1rem;
   text-align: center;
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
   border-radius: 2rem !important;
@@ -119,7 +117,7 @@ const TOTPForgotPasswordForm: React.FC<TOTPForgotPasswordFormProps> = ({ onBackT
         },
         body: JSON.stringify({ email }),
       })
-      
+
       if (!response.ok) {
         const errorData = await response.json()
         throw new Error(errorData.error || 'Failed to initiate password reset')
@@ -147,7 +145,7 @@ const TOTPForgotPasswordForm: React.FC<TOTPForgotPasswordFormProps> = ({ onBackT
         },
         body: JSON.stringify({ email, totpCode }),
       })
-      
+
       if (!response.ok) {
         const errorData = await response.json()
         throw new Error(errorData.error || 'Invalid verification code')
@@ -185,13 +183,13 @@ const TOTPForgotPasswordForm: React.FC<TOTPForgotPasswordFormProps> = ({ onBackT
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ 
-          email, 
-          totpCode, 
+        body: JSON.stringify({
+          email,
+          totpCode,
           password: newPassword
         }),
       })
-      
+
       if (!response.ok) {
         const errorData = await response.json()
         throw new Error(errorData.error || 'Failed to reset password')
@@ -222,7 +220,7 @@ const TOTPForgotPasswordForm: React.FC<TOTPForgotPasswordFormProps> = ({ onBackT
             <CustomTypography variant="sectionHeader" sx={{ fontSize: '1.25rem', textAlign: 'center' }}>
               Reset Password with Authenticator
             </CustomTypography>
-            
+
             <CustomTypography variant="bodyText" sx={{ textAlign: 'center', color: 'text.secondary' }}>
               Enter your email address to begin the secure password reset process using your authenticator app.
             </CustomTypography>
@@ -270,7 +268,7 @@ const TOTPForgotPasswordForm: React.FC<TOTPForgotPasswordFormProps> = ({ onBackT
             <CustomTypography variant="sectionHeader" sx={{ fontSize: '1.25rem', textAlign: 'center' }}>
               Verify Authenticator Code
             </CustomTypography>
-            
+
             <CustomTypography variant="bodyText" sx={{ textAlign: 'center', color: 'text.secondary' }}>
               Enter the 6-digit code from your authenticator app to verify your identity.
             </CustomTypography>
@@ -318,7 +316,7 @@ const TOTPForgotPasswordForm: React.FC<TOTPForgotPasswordFormProps> = ({ onBackT
             <CustomTypography variant="sectionHeader" sx={{ fontSize: '1.25rem', textAlign: 'center' }}>
               Set New Password
             </CustomTypography>
-            
+
             <CustomTypography variant="bodyText" sx={{ textAlign: 'center', color: 'text.secondary' }}>
               Enter your new password below.
             </CustomTypography>
@@ -372,7 +370,7 @@ const TOTPForgotPasswordForm: React.FC<TOTPForgotPasswordFormProps> = ({ onBackT
             <CustomTypography variant="sectionHeader" sx={{ fontSize: '1.25rem', marginBottom: '1rem' }}>
               Password Reset Successfully!
             </CustomTypography>
-            
+
             <CustomTypography variant="bodyText" sx={{ color: 'text.secondary', marginBottom: '2rem' }}>
               Your password has been successfully reset. You can now sign in with your new password.
             </CustomTypography>
@@ -396,14 +394,14 @@ const TOTPForgotPasswordForm: React.FC<TOTPForgotPasswordFormProps> = ({ onBackT
   return (
     <TOTPContainer>
       <TOTPCard elevation={3}>
-        <Box sx={{ height: '2.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', marginTop: '1.5rem', marginBottom: '1rem' }}>
-          <img 
-            src="/scribe-logo-name-transparent.png" 
-            alt="Scribe" 
+        <Box sx={{ height: '4rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <img
+            src="/scribe-logo-name-transparent.png"
+            alt="Scribe"
             style={{ height: '100%', width: 'auto' }}
           />
         </Box>
-        
+
         <Box sx={{ width: '100%', marginBottom: '2rem' }}>
           <Stepper activeStep={activeStep} alternativeLabel>
             {steps.map((label) => (

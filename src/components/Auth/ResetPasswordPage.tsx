@@ -36,12 +36,12 @@ const ResetCard = styled(Paper)`
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 4rem 3rem;
+  padding: 1rem 1rem;
   border-radius: 2rem;
   max-width: 95%;
   width: 30rem;
   margin: 2rem 0;
-  gap: 2.5rem;
+  gap: 1rem;
   text-align: center;
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
   border-radius: 2rem !important;
@@ -190,7 +190,7 @@ const ResetPasswordPage: React.FC = () => {
   return (
     <ResetContainer>
       <ResetCard elevation={3}>
-        <Box sx={{ height: '2.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', marginTop: '1.5rem', marginBottom: '1rem' }}>
+        <Box sx={{ height: '4rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <img
             src="/scribe-logo-name-transparent.png"
             alt="Scribe"

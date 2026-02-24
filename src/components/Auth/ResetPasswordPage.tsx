@@ -26,7 +26,7 @@ const ResetContainer = styled.div`
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  height: 100vh;
+  min-height: 100vh;
   width: 100%;
   padding: 2rem;
   gap: 3rem;
@@ -40,7 +40,7 @@ const ResetCard = styled(Paper)`
   border-radius: 2rem;
   max-width: 95%;
   width: 30rem;
-  max-height: 90%;
+  margin: 2rem 0;
   gap: 2.5rem;
   text-align: center;
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
@@ -119,7 +119,7 @@ const ResetPasswordPage: React.FC = () => {
 
   const handlePasswordReset = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!newPassword || !confirmPassword) {
       setError('Please fill in all fields');
       return;
@@ -144,8 +144,8 @@ const ResetPasswordPage: React.FC = () => {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ 
-          token, 
+        body: JSON.stringify({
+          token,
           password: newPassword
         }),
       });
@@ -191,17 +191,17 @@ const ResetPasswordPage: React.FC = () => {
     <ResetContainer>
       <ResetCard elevation={3}>
         <Box sx={{ height: '2.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', marginTop: '1.5rem', marginBottom: '1rem' }}>
-          <img 
-            src="/scribe-logo-name-transparent.png" 
-            alt="Scribe" 
+          <img
+            src="/scribe-logo-name-transparent.png"
+            alt="Scribe"
             style={{ height: '100%', width: 'auto' }}
           />
         </Box>
-        
+
         <CustomTypography variant="sectionHeader" sx={{ fontSize: '1.25rem', textAlign: 'center' }}>
           Reset Password
         </CustomTypography>
-        
+
         <CustomTypography variant="bodyText" sx={{ textAlign: 'center', color: 'text.secondary' }}>
           Enter your new password below
         </CustomTypography>

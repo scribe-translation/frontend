@@ -44,10 +44,10 @@ const MobileHeader = styled(Paper)`
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 1rem;
+  padding: 0.5rem;
   margin: 0;
   border-radius: 1rem !important;
-  min-height: 5rem;
+  min-height: 1rem;
   flex-shrink: 0;
   box-sizing: border-box;
   width: 100%;
@@ -81,7 +81,7 @@ const LeftPanel = styled(Paper)`
   overflow-x: hidden;
 `
 
-const RightPanel = styled(Paper)<{ isMobile: boolean }>`
+const RightPanel = styled(Paper) <{ isMobile: boolean }>`
   ${props => props.isMobile ? `
     flex: 1;
     width: 100%;
@@ -141,15 +141,35 @@ const bubbleEnter = keyframes`
   }
 `
 
-const MessageBubble = styled(Paper)<{ isRTL?: boolean }>`
-  padding: 0.75rem 1rem;
-  border-radius: 2rem!important;
+const MessageBubble = styled(Paper) <{ isRTL?: boolean }>`
+  padding: 1rem 1.25rem;
+  border-radius: 1.5rem!important;
+  border-bottom-right-radius: 0.5rem!important;
   width: fit-content;
-  max-width: 80%;
+  max-width: 85%;
   align-self: flex-end;
+  margin-bottom: 0.5rem;
   text-align: ${props => props.isRTL ? 'right' : 'left'};
   direction: ${props => props.isRTL ? 'rtl' : 'ltr'};
   animation: ${bubbleEnter} 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+  background-color: #ECF0F1 !important; /* Very light gray for high contrast */
+  color: #2C3E50 !important; /* Dark blue-gray for readability */
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
+
+  & .MuiTypography-root {
+    color: inherit;
+    font-size: 1.15rem; /* Larger font size for better visibility */
+    font-weight: 500;
+    line-height: 1.4;
+  }
+  
+  & .MuiTypography-caption {
+    opacity: 0.7;
+    color: inherit;
+    font-size: 0.85rem;
+    margin-top: 0.25rem;
+    display: block;
+  }
 `
 
 const BubblesContainer = styled.div`
@@ -183,7 +203,7 @@ function InputApp() {
   }
 
   const [sourceLanguage, setSourceLanguage] = useState<GoogleSTTLanguageCode>(getInitialSourceLanguage())
-  const [connectionCount, setConnectionCount] = useState<{total: number, byLanguage: Record<string, number>}>({total: 0, byLanguage: {}})
+  const [connectionCount, setConnectionCount] = useState<{ total: number, byLanguage: Record<string, number> }>({ total: 0, byLanguage: {} })
 
   // Handle source language change and save to cookie
   const handleSourceLanguageChange = (language: GoogleSTTLanguageCode) => {
@@ -217,7 +237,7 @@ function InputApp() {
   const [audioLevel, setAudioLevel] = useState<number>(0) // Audio level from 0 to 1
   const [transcriptionBubbles, setTranscriptionBubbles] = useState<MessageBubble[]>([])
   const [currentTranscription, setCurrentTranscription] = useState('')
-  
+
   // Microphone gain control (0.0 to 1.5, default 1.0 = 100%)
   const getInitialMicrophoneGain = (): number => {
     const savedGain = getCookie('scribe-microphone-gain')
@@ -236,39 +256,39 @@ function InputApp() {
     if (!isTranslating) {
       return undefined // Use default Material-UI primary color (#9BB5D1)
     }
-    
+
     // Set a threshold - only start changing color above this level
     const audioThreshold = 0.20 // Only react to audio levels above 15%
     const adjustedLevel = Math.max(0, audioLevel - audioThreshold)
-    
+
     // Normalize the adjusted level to 0-1 range
     const normalizedLevel = Math.min(1, adjustedLevel / (1 - audioThreshold))
-    
+
     // Apply sensitivity to the normalized level
     const intensity = Math.min(normalizedLevel * 2, 1) // Reduced from 3 to 2 for smoother transition
-    
+
     // Start with your brand's primary color (#9BB5D1) and scale towards a neutral warm tone
     const brandRed = 155   // #9BB5D1 red component
     const brandGreen = 181 // #9BB5D1 green component  
     const brandBlue = 209  // #9BB5D1 blue component
-    
+
     // End with a neutral warm color (muted orange/brown)
     const endRed = 180    // Neutral warm red
     const endGreen = 120  // Neutral warm green
     const endBlue = 80    // Neutral warm blue
-    
+
     // Scale from brand color to neutral warm color based on intensity
     const red = Math.floor(brandRed + ((endRed - brandRed) * intensity))
     const green = Math.floor(brandGreen + ((endGreen - brandGreen) * intensity))
     const blue = Math.floor(brandBlue + ((endBlue - brandBlue) * intensity))
-    
+
     return `rgb(${red}, ${green}, ${blue})`
   }
   const [qrModalOpen, setQrModalOpen] = useState(false)
   const [isSocketConnecting, setIsSocketConnecting] = useState(false)
   const [isSocketConnected, setIsSocketConnected] = useState(false)
   const [profileModalOpen, setProfileModalOpen] = useState(false)
-  const [connectionInfo, setConnectionInfo] = useState<{userCode: string, connectionUrl: string, qrCodeUrl: string, shareText: string} | null>(null)
+  const [connectionInfo, setConnectionInfo] = useState<{ userCode: string, connectionUrl: string, qrCodeUrl: string, shareText: string } | null>(null)
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null)
   const [speechConfig, setSpeechConfig] = useState({
     speechEndTimeout: 1, // Balanced timeout for natural speech patterns
@@ -285,7 +305,7 @@ function InputApp() {
   const sourceLanguageRef = React.useRef<string>('en-CA') // Ref to track source language for stream restart handler
   const pendingTranscriptionRef = React.useRef<{ id: string; text: string; sourceLanguage: string; timestamp: number } | null>(null) // For pending transcription during overlap
   const pendingPromotionTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null) // Timeout to promote pending transcription
-  
+
   // Connection health monitoring refs
   const lastPongTimeRef = React.useRef<number>(Date.now())
   const missedPongCountRef = React.useRef<number>(0)
@@ -370,18 +390,18 @@ function InputApp() {
       reconnectionDelay: 1000,
       timeout: 20000
     })
-    
+
     socketRef.current.on('connect', () => {
       setIsSocketConnecting(false)
       setIsSocketConnected(true)
       setConnectionQuality('good')
       socketRef.current?.emit('getConnectionCount')
-      
+
       // Reset connection health tracking
       lastPongTimeRef.current = Date.now()
       missedPongCountRef.current = 0
       awaitingPongRef.current = false
-      
+
       const intervalId = setInterval(() => {
         if (socketRef.current?.connected) {
           socketRef.current.emit('getConnectionCount')
@@ -389,9 +409,9 @@ function InputApp() {
           clearInterval(intervalId)
         }
       }, 5000)
-      
-      ;(socketRef.current as any).connectionCountInterval = intervalId
-      
+
+        ; (socketRef.current as any).connectionCountInterval = intervalId
+
       // Aggressive heartbeat mechanism - ping every 5 seconds for faster detection
       const heartbeatInterval = setInterval(() => {
         if (socketRef.current?.connected) {
@@ -399,12 +419,12 @@ function InputApp() {
           if (awaitingPongRef.current) {
             missedPongCountRef.current++
             console.warn(`⚠️ Missed pong #${missedPongCountRef.current}`)
-            
+
             // 2 missed pongs (10s) = unstable connection
             if (missedPongCountRef.current >= 2) {
               setConnectionQuality('unstable')
             }
-            
+
             // 3 missed pongs (15s) = force reconnection before server timeout
             if (missedPongCountRef.current >= 3) {
               console.error('❌ Connection appears dead (3 missed pongs), forcing reconnection...')
@@ -414,7 +434,7 @@ function InputApp() {
               return
             }
           }
-          
+
           // Send ping and mark as awaiting pong
           awaitingPongRef.current = true
           socketRef.current.emit('ping')
@@ -422,24 +442,24 @@ function InputApp() {
           clearInterval(heartbeatInterval)
         }
       }, 5000) // Send ping every 5 seconds for aggressive detection
-      
-      ;(socketRef.current as any).heartbeatInterval = heartbeatInterval
+
+        ; (socketRef.current as any).heartbeatInterval = heartbeatInterval
     })
 
-    socketRef.current.on('connectionCount', (data: {total: number, byLanguage: Record<string, number>}) => {
+    socketRef.current.on('connectionCount', (data: { total: number, byLanguage: Record<string, number> }) => {
       setConnectionCount(data)
     })
 
     socketRef.current.on('disconnect', (reason) => {
       console.log(`🔌 InputApp disconnected: ${reason}, wasStreaming: ${isTranslatingRef.current}`)
-      
+
       // Track if we were streaming for auto-resume on reconnect (use ref to avoid stale closure)
       wasStreamingBeforeDisconnectRef.current = isTranslatingRef.current
-      
+
       setIsSocketConnecting(false)
       setIsSocketConnected(false)
       setConnectionQuality('disconnected')
-      
+
       // Clear intervals
       if ((socketRef.current as any)?.connectionCountInterval) {
         clearInterval((socketRef.current as any).connectionCountInterval)
@@ -460,16 +480,16 @@ function InputApp() {
       setIsSocketConnecting(false)
       setIsSocketConnected(true)
       setConnectionQuality('good')
-      
+
       // Reset connection health tracking
       lastPongTimeRef.current = Date.now()
       missedPongCountRef.current = 0
       awaitingPongRef.current = false
-      
+
       // Re-initialize Google Speech Service with the reconnected socket
       try {
         await googleSpeechService.initialize(socketRef.current)
-        
+
         // Auto-resume streaming if we were streaming before disconnect
         if (wasStreamingBeforeDisconnectRef.current) {
           console.log('🎤 Auto-resuming streaming after reconnection...')
@@ -527,13 +547,13 @@ function InputApp() {
       // Track successful pong - connection is healthy
       lastPongTimeRef.current = Date.now()
       awaitingPongRef.current = false
-      
+
       // Clear visibility verification timeout if pending
       if ((socketRef.current as any)?.visibilityVerifyTimeout) {
         clearTimeout((socketRef.current as any).visibilityVerifyTimeout)
-        ;(socketRef.current as any).visibilityVerifyTimeout = null
+          ; (socketRef.current as any).visibilityVerifyTimeout = null
       }
-      
+
       // Reset missed count and quality on successful pong
       if (missedPongCountRef.current > 0) {
         console.log('✅ Connection recovered, pong received')
@@ -547,7 +567,7 @@ function InputApp() {
     socketRef.current.on('streamRestartPending', (data: { reason: string, timestamp: number }) => {
       const displayedText = currentTranscriptionRef.current
       if (displayedText && displayedText.trim()) {
-        
+
         // Store pending transcription for potential promotion
         const pendingId = `pending-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
         pendingTranscriptionRef.current = {
@@ -556,7 +576,7 @@ function InputApp() {
           sourceLanguage: sourceLanguageRef.current,
           timestamp: Date.now()
         }
-        
+
         // Set timeout to promote pending to final if no final result arrives
         if (pendingPromotionTimeoutRef.current) {
           clearTimeout(pendingPromotionTimeoutRef.current)
@@ -564,7 +584,7 @@ function InputApp() {
         pendingPromotionTimeoutRef.current = setTimeout(() => {
           const pending = pendingTranscriptionRef.current
           if (pending && pending.text && pending.text.trim()) {
-            
+
             const newBubble: MessageBubble = {
               id: pending.id,
               text: pending.text,
@@ -572,7 +592,7 @@ function InputApp() {
               isComplete: false
             }
             setTranscriptionBubbles(prev => [...prev, newBubble])
-            
+
             // Send to backend for translation
             if (socketRef.current?.connected) {
               socketRef.current.emit('speechTranscription', {
@@ -581,9 +601,9 @@ function InputApp() {
                 bubbleId: pending.id
               })
             }
-            
+
             setCurrentTranscription('')
-            
+
             setTimeout(() => {
               setTranscriptionBubbles(prev =>
                 prev.map(bubble =>
@@ -591,7 +611,7 @@ function InputApp() {
                 )
               )
             }, 250)
-            
+
             pendingTranscriptionRef.current = null
           }
         }, 3000) // Wait 3 seconds for final result before promoting
@@ -601,14 +621,14 @@ function InputApp() {
     // Listen for stream restart events to save displayed interim text (fallback for error recovery)
     // This ensures no speech is lost when Google Cloud STT stream restarts
     socketRef.current.on('streamRestart', (data: { reason: string }) => {
-      
+
       // Clear any pending promotion since we're doing immediate save
       if (pendingPromotionTimeoutRef.current) {
         clearTimeout(pendingPromotionTimeoutRef.current)
         pendingPromotionTimeoutRef.current = null
       }
       pendingTranscriptionRef.current = null
-      
+
       const displayedText = currentTranscriptionRef.current
       if (displayedText && displayedText.trim()) {
         // Save the displayed text as a final bubble
@@ -620,7 +640,7 @@ function InputApp() {
           isComplete: false
         }
         setTranscriptionBubbles(prev => [...prev, newBubble])
-        
+
         // Send to backend for translation using ref to get current value
         if (socketRef.current?.connected) {
           socketRef.current.emit('speechTranscription', {
@@ -629,10 +649,10 @@ function InputApp() {
             bubbleId: uniqueId
           })
         }
-        
+
         // Clear the interim display
         setCurrentTranscription('')
-        
+
         // Mark as complete after delay
         setTimeout(() => {
           setTranscriptionBubbles(prev =>
@@ -668,19 +688,19 @@ function InputApp() {
         visibilityHiddenTimeRef.current = Date.now()
       } else if (document.visibilityState === 'visible') {
         // App returning to foreground
-        const hiddenDuration = visibilityHiddenTimeRef.current 
-          ? Date.now() - visibilityHiddenTimeRef.current 
+        const hiddenDuration = visibilityHiddenTimeRef.current
+          ? Date.now() - visibilityHiddenTimeRef.current
           : 0
         visibilityHiddenTimeRef.current = null
-        
+
         console.log(`👁️ App foregrounded after ${Math.round(hiddenDuration / 1000)}s`)
-        
+
         // If socket exists, verify connection immediately
         if (socketRef.current) {
           // Send immediate ping to verify connection
           awaitingPongRef.current = true
           socketRef.current.emit('ping')
-          
+
           // If no pong received within 3 seconds, force reconnect
           const verifyTimeout = setTimeout(() => {
             if (awaitingPongRef.current && socketRef.current) {
@@ -689,15 +709,15 @@ function InputApp() {
               socketRef.current.disconnect()
             }
           }, 3000)
-          
-          // Store timeout so it can be cleared if pong arrives
-          ;(socketRef.current as any).visibilityVerifyTimeout = verifyTimeout
+
+            // Store timeout so it can be cleared if pong arrives
+            ; (socketRef.current as any).visibilityVerifyTimeout = verifyTimeout
         }
       }
     }
-    
+
     document.addEventListener('visibilitychange', handleVisibilityChange)
-    
+
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       // Clear any pending verification timeout
@@ -780,13 +800,13 @@ function InputApp() {
           pendingPromotionTimeoutRef.current = null
         }
         pendingTranscriptionRef.current = null
-        
+
         // Don't create empty bubbles
         if (!result.transcript || !result.transcript.trim()) {
           setCurrentTranscription('')
           return
         }
-        
+
         const uniqueId = `${result.bubbleId}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
         const newBubble: MessageBubble = {
           id: uniqueId,
@@ -794,10 +814,10 @@ function InputApp() {
           timestamp: new Date(),
           isComplete: false
         }
-        
+
         setTranscriptionBubbles(prev => [...prev, newBubble])
         setCurrentTranscription('')
-        
+
         if (timeoutRef.current) {
           clearTimeout(timeoutRef.current)
         }
@@ -828,7 +848,7 @@ function InputApp() {
       // Check if Google Speech Service is ready
       if (!googleSpeechService.isReady()) {
         console.error('❌ Google Speech Service not ready, attempting to initialize...');
-        
+
         // Try to initialize if socket is connected
         if (isSocketConnected && socketRef.current) {
           try {
@@ -866,9 +886,9 @@ function InputApp() {
         timestamp: new Date(),
         isComplete: false
       }
-      
+
       setTranscriptionBubbles(prev => [...prev, newBubble])
-      
+
       // Send to backend for translation and distribution to listeners
       if (socketRef.current && isSocketConnected) {
         socketRef.current.emit('speechTranscription', {
@@ -877,7 +897,7 @@ function InputApp() {
           bubbleId: uniqueId
         })
       }
-      
+
       // Mark as complete after a short delay
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current)
@@ -892,10 +912,10 @@ function InputApp() {
         )
       }, 250)
     }
-    
+
     // Reset current transcription
     setCurrentTranscription('')
-    
+
     googleSpeechService.stopRecognition()
     setIsTranslating(false)
   }, [currentTranscription, socketRef, isSocketConnected, sourceLanguage])
@@ -929,18 +949,11 @@ function InputApp() {
         <MobileHeader elevation={3}>
           <MobileHeaderLeft>
             <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
-              <Box sx={{ height: '5rem', display: 'flex', alignItems: 'center' }}>
-                <img 
-                  src="/scribe-logo-name-transparent.png" 
-                  alt="Scribe" 
-                  style={{ height: '100%', width: 'auto' }}
-                />
-              </Box>
               <Tooltip title="View Profile" arrow placement="bottom">
-                <Box 
-                  sx={{ 
-                    display: 'flex', 
-                    alignItems: 'center', 
+                <Box
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
                     gap: '0.5rem',
                     cursor: 'pointer',
                     padding: '0.25rem',
@@ -954,10 +967,10 @@ function InputApp() {
                   onClick={() => setProfileModalOpen(true)}
                 >
                   <AccountBoxIcon sx={{ fontSize: 20, color: 'primary.main' }} />
-                  <Typography variant="bodyText" sx={{ 
-                    color: 'text.secondary', 
+                  <Typography variant="bodyText" sx={{
+                    color: 'text.secondary',
                     fontSize: '0.8rem',
-                    display: 'flex', 
+                    display: 'flex',
                     alignItems: 'center'
                   }}>
                     {user?.name}
@@ -966,7 +979,7 @@ function InputApp() {
               </Tooltip>
             </Box>
           </MobileHeaderLeft>
-          
+
           <MobileHeaderRight>
             {isSocketConnecting ? (
               <Box sx={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -987,7 +1000,7 @@ function InputApp() {
               onClick={logout}
               color="primary"
               size="small"
-              sx={{ 
+              sx={{
                 borderRadius: '50%',
                 '&:hover': {
                   backgroundColor: 'rgba(210, 180, 140, 0.1)'
@@ -1001,18 +1014,18 @@ function InputApp() {
       ) : (
         <LeftPanel elevation={3}>
           <Box sx={{ height: '7rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <img 
-              src="/scribe-logo-name-transparent.png" 
-              alt="Scribe" 
+            <img
+              src="/scribe-logo-name-transparent.png"
+              alt="Scribe"
               style={{ height: '100%', width: 'auto' }}
             />
           </Box>
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <Tooltip title="View Profile" arrow placement="bottom">
-              <Box 
-                sx={{ 
-                  display: 'flex', 
-                  alignItems: 'center', 
+              <Box
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
                   gap: '0.5rem',
                   cursor: 'pointer',
                   padding: '0.25rem',
@@ -1026,10 +1039,10 @@ function InputApp() {
                 onClick={() => setProfileModalOpen(true)}
               >
                 <AccountBoxIcon sx={{ fontSize: 32, color: 'primary.main' }} />
-                <Typography variant="bodyText" sx={{ 
-                  color: 'text.secondary', 
-                  fontSize: '1rem', 
-                  display: 'flex', 
+                <Typography variant="bodyText" sx={{
+                  color: 'text.secondary',
+                  fontSize: '1rem',
+                  display: 'flex',
                   alignItems: 'center'
                 }}>
                   {user?.name}
@@ -1039,7 +1052,7 @@ function InputApp() {
             <IconButton
               onClick={logout}
               color="primary"
-              sx={{ 
+              sx={{
                 borderRadius: '50%',
                 padding: '0.5rem',
                 '&:hover': {
@@ -1085,7 +1098,7 @@ function InputApp() {
                       const sttInfo = getSTTLanguageInfo(lang as GoogleSTTLanguageCode)
                       languageName = sttInfo.name !== 'Unknown' ? sttInfo.name : lang
                     }
-                    
+
                     return (
                       <Tooltip
                         key={lang}
@@ -1195,17 +1208,17 @@ function InputApp() {
             </Typography>
             <QRCodeContainer ref={qrCodeRef}>
               {connectionInfo ? (
-                <img 
-                  src={connectionInfo.qrCodeUrl} 
-                  alt="QR Code" 
+                <img
+                  src={connectionInfo.qrCodeUrl}
+                  alt="QR Code"
                   style={{ width: 120, height: 120 }}
                 />
               ) : (
-                <Box sx={{ 
-                  width: 120, 
-                  height: 120, 
-                  display: 'flex', 
-                  alignItems: 'center', 
+                <Box sx={{
+                  width: 120,
+                  height: 120,
+                  display: 'flex',
+                  alignItems: 'center',
                   justifyContent: 'center',
                   backgroundColor: 'rgba(255, 255, 255, 0.1)',
                   borderRadius: '8px'
@@ -1301,46 +1314,47 @@ function InputApp() {
                   </Tooltip>
                 </Box>
               </Box>
-              <Button
-                variant="outlined"
-                fullWidth
-                startIcon={<QrCodeIcon />}
-                onClick={() => setQrModalOpen(true)}
-                sx={{
-                  borderRadius: '2rem',
-                  marginTop: '1rem',
-                  padding: '0.75rem'
-                }}
-              >
-                Show QR Code
-              </Button>
-              <Button
-                variant="contained"
-                color="primary"
-                fullWidth
-                disabled={!isServiceReady}
-                sx={{
-                  borderRadius: '2rem',
-                  marginTop: '1rem',
-                  padding: '0.75rem'
-                }}
-                onClick={() => {
-                  if (isTranslating) {
-                    setShouldBeListening(false)
-                  } else {
-                    setShouldBeListening(true)
-                  }
-                }}
-              >
-                {!isServiceReady ? 'Initializing...' : isTranslating ? 'Translating...' : 'Translate'}
-              </Button>
+              <Box sx={{ display: 'flex', gap: '1rem', marginTop: '1rem' }}>
+                <Button
+                  variant="outlined"
+                  startIcon={<QrCodeIcon />}
+                  onClick={() => setQrModalOpen(true)}
+                  sx={{
+                    flex: 1,
+                    borderRadius: '2rem',
+                    padding: '0.5rem'
+                  }}
+                >
+                  QR Code
+                </Button>
+                <Button
+                  variant="contained"
+                  color="primary"
+                  fullWidth
+                  disabled={!isServiceReady}
+                  sx={{
+                    flex: 1,
+                    borderRadius: '2rem',
+                    padding: '0.5rem'
+                  }}
+                  onClick={() => {
+                    if (isTranslating) {
+                      setShouldBeListening(false)
+                    } else {
+                      setShouldBeListening(true)
+                    }
+                  }}
+                >
+                  {!isServiceReady ? 'Initializing...' : isTranslating ? 'Translating...' : 'Translate'}
+                </Button>
+              </Box>
             </Box>
           )}
-          
+
           <BubblesContainer>
             {currentTranscription && (
-              <MessageBubble 
-                elevation={1} 
+              <MessageBubble
+                elevation={1}
                 isRTL={isRTLLanguage(sourceLanguage)}
                 sx={{ opacity: 0.7 }}
               >
@@ -1349,8 +1363,8 @@ function InputApp() {
               </MessageBubble>
             )}
             {[...transcriptionBubbles].reverse().map((bubble) => (
-              <MessageBubble 
-                key={bubble.id} 
+              <MessageBubble
+                key={bubble.id}
                 elevation={3}
                 isRTL={isRTLLanguage(sourceLanguage)}
               >
@@ -1360,7 +1374,7 @@ function InputApp() {
           </BubblesContainer>
         </RightPanelContent>
       </RightPanel>
-      
+
       {/* QR Code Modal */}
       <Dialog
         open={qrModalOpen}
@@ -1383,20 +1397,20 @@ function InputApp() {
           <Typography variant="bodyText" sx={{ marginBottom: '1.5rem', color: 'text.secondary' }}>
             Share this QR code with your audience
           </Typography>
-          
+
           <Box ref={qrCodeRef} sx={{ marginBottom: '1.5rem' }}>
             {connectionInfo ? (
-              <img 
-                src={connectionInfo.qrCodeUrl} 
-                alt="QR Code" 
+              <img
+                src={connectionInfo.qrCodeUrl}
+                alt="QR Code"
                 style={{ width: 200, height: 200 }}
               />
             ) : (
-              <Box sx={{ 
-                width: 200, 
-                height: 200, 
-                display: 'flex', 
-                alignItems: 'center', 
+              <Box sx={{
+                width: 200,
+                height: 200,
+                display: 'flex',
+                alignItems: 'center',
                 justifyContent: 'center',
                 backgroundColor: 'rgba(255, 255, 255, 0.1)',
                 borderRadius: '8px'
@@ -1405,10 +1419,10 @@ function InputApp() {
               </Box>
             )}
           </Box>
-          
-          <Typography variant="captionText" sx={{ 
-            textAlign: 'center', 
-            fontSize: '0.8rem', 
+
+          <Typography variant="captionText" sx={{
+            textAlign: 'center',
+            fontSize: '0.8rem',
             wordBreak: 'break-all',
             marginBottom: '1rem',
             display: 'block'
@@ -1440,7 +1454,7 @@ function InputApp() {
           </Button>
         </DialogActions>
       </Dialog>
-      
+
       <ProfileModal
         open={profileModalOpen}
         onClose={() => setProfileModalOpen(false)}
@@ -1448,7 +1462,7 @@ function InputApp() {
         isSocketConnected={isSocketConnected}
         onLogout={logout}
       />
-      
+
       <Snackbar
         open={!!errorMessage}
         autoHideDuration={5000}
@@ -1456,23 +1470,23 @@ function InputApp() {
         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
         sx={{ bottom: { xs: 90, sm: 24 } }}
       >
-        <Alert 
-          severity="warning" 
+        <Alert
+          severity="warning"
           variant="filled"
           sx={{ borderRadius: '1rem' }}
         >
           {errorMessage}
         </Alert>
       </Snackbar>
-      
+
       {/* Connection quality warning */}
       <Snackbar
         open={connectionQuality === 'unstable'}
         anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
         sx={{ top: { xs: 70, sm: 24 } }}
       >
-        <Alert 
-          severity="warning" 
+        <Alert
+          severity="warning"
           variant="filled"
           sx={{ borderRadius: '1rem' }}
         >

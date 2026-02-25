@@ -27,9 +27,8 @@ const LoginContainer = styled.div`
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  height: 100%;
+  min-height: 100%;
   width: 100%;
-  padding: 2rem;
   gap: 3rem;
 `
 
@@ -37,12 +36,12 @@ const LoginCard = styled(Paper)`
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 4rem 3rem;
+  padding: 1rem 1rem;
   border-radius: 2rem;
   max-width: 95%;
   width: 30rem;
-  max-height: 90%;
-  gap: 2.5rem;
+  margin: 2rem 0;
+  gap: 1rem;
   text-align: center;
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
   border-radius: 2rem !important;
@@ -129,18 +128,18 @@ const LoginForm: React.FC<LoginFormProps> = ({ onSwitchToRegister, onTOTPForgotP
   return (
     <LoginContainer>
       <LoginCard elevation={3}>
-        <Box sx={{ height: '2.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', marginTop: '1.5rem', marginBottom: '1rem' }}>
-          <img 
-            src="/scribe-logo-name-transparent.png" 
-            alt="Scribe" 
+        <Box sx={{ height: '4rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <img
+            src="/scribe-logo-name-transparent.png"
+            alt="Scribe"
             style={{ height: '100%', width: 'auto' }}
           />
         </Box>
-        
+
         <CustomTypography variant="sectionHeader" sx={{ fontSize: '1.25rem', textAlign: 'center' }}>
           Welcome Back
         </CustomTypography>
-        
+
         <CustomTypography variant="bodyText" sx={{ textAlign: 'center', color: 'text.secondary' }}>
           Sign in to continue with real-time translation
         </CustomTypography>

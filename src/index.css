@@ -80,22 +80,22 @@
 body {
   margin: 0;
   min-width: 320px;
-  height: 100vh;
+  min-height: 100vh;
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
   
   /* On mobile, use small viewport height to account for browser UI and keep header visible */
   @media (max-width: 768px) {
-    height: 100svh; /* Small viewport height - keeps browser header visible */
+    min-height: 100svh; /* Small viewport height - keeps browser header visible */
   }
 }
 
 #root {
   width: 100%;
-  height: 100vh;
+  min-height: 100vh;
   
   /* On mobile, use small viewport height to account for browser UI */
   @media (max-width: 768px) {
-    height: 100svh; /* Small viewport height - keeps browser header visible */
+    min-height: 100svh; /* Small viewport height - keeps browser header visible */
   }
 }
 

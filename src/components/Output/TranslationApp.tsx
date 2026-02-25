@@ -24,8 +24,6 @@ const LandingPageContainer = styled.div`
   justify-content: center;
   height: 100%;
   width: 100%;
-  padding: 2rem;
-  gap: 3rem;
 `
 
 const LandingCard = styled(Paper)`
@@ -76,10 +74,10 @@ const MobileHeader = styled(Paper)`
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 1rem;
+  padding: 0.5rem;
   margin: 0;
   border-radius: 1rem !important;
-  min-height: 5rem;
+  min-height: 3rem;
   flex-shrink: 0;
   box-sizing: border-box;
   width: 100%;
@@ -110,7 +108,7 @@ const LeftPanel = styled(Paper)`
   height: calc(100% - 2rem);
 `
 
-const RightPanel = styled(Paper)<{ isMobile: boolean }>`
+const RightPanel = styled(Paper) <{ isMobile: boolean }>`
   ${props => props.isMobile ? `
     flex: 1;
     width: 100%;
@@ -153,15 +151,35 @@ const TypingIndicatorSlot = styled.div<{ $active: boolean }>`
   flex-direction: column;
 `
 
-const MessageBubble = styled(Paper)<{ isRTL?: boolean }>`
-  padding: 0.75rem 1rem;
-  border-radius: 2rem !important;
+const MessageBubble = styled(Paper) <{ isRTL?: boolean }>`
+  padding: 1rem 1.25rem;
+  border-radius: 1.5rem!important;
+  border-bottom-right-radius: 0.5rem!important;
   width: fit-content;
-  max-width: 80%;
+  max-width: 85%;
   align-self: flex-end;
+  margin-bottom: 0.5rem;
   text-align: ${props => props.isRTL ? 'right' : 'left'};
   direction: ${props => props.isRTL ? 'rtl' : 'ltr'};
   animation: ${bubbleEnter} 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+  background-color: #ECF0F1 !important; /* Very light gray for high contrast */
+  color: #2C3E50 !important; /* Dark blue-gray for readability */
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
+
+  & .MuiTypography-root {
+    color: inherit;
+    font-size: 1.15rem; /* Larger font size for better visibility */
+    font-weight: 500;
+    line-height: 1.4;
+  }
+  
+  & .MuiTypography-caption {
+    opacity: 0.7;
+    color: inherit;
+    font-size: 0.85rem;
+    margin-top: 0.25rem;
+    display: block;
+  }
 `
 
 const BubblesContainer = styled.div`
@@ -219,10 +237,8 @@ const RightPanelContent = styled.div<{ isMobile: boolean }>`
 `
 
 const BackButton = styled(Button)`
-  margin-bottom: 1rem;
   border-radius: 2rem;
   text-transform: none;
-  align-self: flex-start;
 `
 
 interface TranslationBubble {
@@ -251,7 +267,7 @@ function TranslationApp() {
   const [sourceLanguage, setSourceLanguage] = useState<string | undefined>(undefined) // Track source language from speaker
   const [translationBubbles, setTranslationBubbles] = useState<TranslationBubble[]>([])
   const [isSpeakerTyping, setIsSpeakerTyping] = useState(false) // Track if speaker is typing (interim transcription)
-  
+
   // Text-to-Speech state
   const [ttsEnabled, setTtsEnabled] = useState(false)
   const [isSpeaking, setIsSpeaking] = useState(false)
@@ -278,26 +294,26 @@ function TranslationApp() {
       setTtsEnabled(false)
     }
   }
-  
+
   // Check if TTS is available for the current target language
   const ttsAvailable = isTTSSupported(targetLanguage)
-  
+
   // Sync refs with state
   useEffect(() => {
     ttsEnabledRef.current = ttsEnabled
   }, [ttsEnabled])
-  
+
   useEffect(() => {
     targetLanguageRef.current = targetLanguage
   }, [targetLanguage])
-  
+
   // Ref for processQueue to avoid stale closure issues
-  const processQueueRef = useRef<() => void>(() => {})
-  
+  const processQueueRef = useRef<() => void>(() => { })
+
   // Initialize audio element for TTS playback
   useEffect(() => {
     audioRef.current = new Audio()
-    
+
     return () => {
       if (audioRef.current) {
         audioRef.current.pause()
@@ -305,15 +321,15 @@ function TranslationApp() {
       }
     }
   }, [])
-  
+
   // Function to speak text using Google Cloud TTS via backend API
   const speakText = useCallback(async (text: string, languageCode: string) => {
     if (!audioRef.current) {
       return
     }
-    
+
     setIsSpeaking(true)
-    
+
     try {
       const response = await fetch(`${CONFIG.BACKEND_URL}/api/tts`, {
         method: 'POST',
@@ -325,22 +341,22 @@ function TranslationApp() {
           languageCode
         })
       })
-      
+
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
         throw new Error(errorData.error || `TTS request failed: ${response.status}`)
       }
-      
+
       const audioBlob = await response.blob()
       const audioUrl = URL.createObjectURL(audioBlob)
-      
+
       audioRef.current.onended = () => {
         URL.revokeObjectURL(audioUrl)
         setIsSpeaking(false)
         isProcessingRef.current = false
         setTimeout(() => processQueueRef.current(), 100)
       }
-      
+
       audioRef.current.onerror = () => {
         URL.revokeObjectURL(audioUrl)
         console.error('🔊 TTS: Audio playback error')
@@ -348,7 +364,7 @@ function TranslationApp() {
         isProcessingRef.current = false
         setTimeout(() => processQueueRef.current(), 100)
       }
-      
+
       audioRef.current.src = audioUrl
       audioRef.current.play().catch(err => {
         console.error('🔊 TTS: Playback error:', err)
@@ -364,12 +380,12 @@ function TranslationApp() {
       setTimeout(() => processQueueRef.current(), 100)
     }
   }, [])
-  
+
   // Process speech queue - uses refs to avoid stale closures
   const processQueue = useCallback(() => {
     if (!ttsEnabledRef.current) return
     if (isProcessingRef.current) return
-    
+
     const nextItem = speechQueueRef.current.shift()
     if (nextItem) {
       isProcessingRef.current = true
@@ -377,34 +393,34 @@ function TranslationApp() {
       speakText(nextItem, currentTargetLang)
     }
   }, [speakText])
-  
+
   useEffect(() => {
     processQueueRef.current = processQueue
   }, [processQueue])
-  
+
   // Add text to speech queue
   const queueSpeech = useCallback((text: string) => {
     if (!ttsEnabledRef.current) {
       return
     }
-    
+
     speechQueueRef.current.push(text)
-    
+
     // If not currently processing, start processing queue
     if (!isProcessingRef.current) {
       processQueue()
     }
   }, [processQueue])
-  
+
   // Keep queueSpeechRef updated with latest queueSpeech function
   useEffect(() => {
     queueSpeechRef.current = queueSpeech
   }, [queueSpeech])
-  
+
   // Toggle TTS on/off
   const toggleTts = useCallback(() => {
     if (!ttsAvailable) return
-    
+
     setTtsEnabled(prev => {
       const newValue = !prev
       if (!newValue) {
@@ -420,18 +436,18 @@ function TranslationApp() {
       return newValue
     })
   }, [ttsAvailable])
-  
+
   const [isConnected, setIsConnected] = useState(false)
   const [isConnecting, setIsConnecting] = useState(false)
   const [showLanguageSelection, setShowLanguageSelection] = useState(true)
   const [connectionQuality, setConnectionQuality] = useState<'good' | 'unstable' | 'disconnected'>('good')
-  
+
   // Connection health monitoring refs
   const lastPongTimeRef = useRef<number>(Date.now())
   const missedPongCountRef = useRef<number>(0)
   const awaitingPongRef = useRef<boolean>(false)
   const visibilityHiddenTimeRef = useRef<number | null>(null)
-  
+
   // Keep ref in sync with state for socket handlers
   useEffect(() => {
     showLanguageSelectionRef.current = showLanguageSelection
@@ -440,7 +456,7 @@ function TranslationApp() {
   const [isValidatingUserCode, setIsValidatingUserCode] = useState(false)
   const [userCodeValidationError, setUserCodeValidationError] = useState('')
   const [attemptedUserCode, setAttemptedUserCode] = useState('')
-  
+
   const socketRef = useRef<Socket | null>(null)
   const theme = useTheme()
   const isMobile = useMediaQuery(theme.breakpoints.down('md'))
@@ -482,13 +498,13 @@ function TranslationApp() {
       setIsValidatingUserCode(false)
     }
   }
-  
+
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search)
     const codeFromUrl = urlParams.get('code')
     console.log('🔗 TranslationApp - User code from URL:', codeFromUrl)
     console.log('🔗 TranslationApp - Current userCode:', userCode)
-    
+
     if (codeFromUrl) {
       setAttemptedUserCode(codeFromUrl.toUpperCase())
       setUserCodeInput(codeFromUrl.toUpperCase())
@@ -501,7 +517,7 @@ function TranslationApp() {
 
   useEffect(() => {
     console.log('🔗 TranslationApp - Connecting with userCode:', userCode, 'targetLanguage:', targetLanguage)
-    
+
     // Only connect if we have both a user code and target language
     if (!targetLanguage || !userCode) {
       console.log('🔗 TranslationApp - Not connecting: missing userCode or targetLanguage')
@@ -522,17 +538,17 @@ function TranslationApp() {
       reconnectionDelay: 1000,
       timeout: 20000
     })
-    
+
     socketRef.current.on('connect', () => {
       setIsConnecting(false)
       setIsConnected(true)
       setConnectionQuality('good')
-      
+
       // Reset connection health tracking
       lastPongTimeRef.current = Date.now()
       missedPongCountRef.current = 0
       awaitingPongRef.current = false
-      
+
       // Only re-establish target language if user has already joined (not on landing page)
       // Use refs to avoid stale closure issues
       const currentTargetLanguage = targetLanguageRef.current
@@ -541,7 +557,7 @@ function TranslationApp() {
         console.log(`🔗 Re-establishing target language: ${currentTargetLanguage}`)
         socketRef.current?.emit('setTargetLanguage', { targetLanguage: currentTargetLanguage })
       }
-      
+
       // Aggressive heartbeat mechanism - ping every 5 seconds for faster detection
       const heartbeatInterval = setInterval(() => {
         if (socketRef.current?.connected) {
@@ -549,12 +565,12 @@ function TranslationApp() {
           if (awaitingPongRef.current) {
             missedPongCountRef.current++
             console.warn(`⚠️ Missed pong #${missedPongCountRef.current}`)
-            
+
             // 2 missed pongs (10s) = unstable connection
             if (missedPongCountRef.current >= 2) {
               setConnectionQuality('unstable')
             }
-            
+
             // 3 missed pongs (15s) = force reconnection before server timeout
             if (missedPongCountRef.current >= 3) {
               console.error('❌ Connection appears dead (3 missed pongs), forcing reconnection...')
@@ -564,7 +580,7 @@ function TranslationApp() {
               return
             }
           }
-          
+
           // Send ping and mark as awaiting pong
           awaitingPongRef.current = true
           socketRef.current.emit('ping')
@@ -572,63 +588,63 @@ function TranslationApp() {
           clearInterval(heartbeatInterval)
         }
       }, 5000) // Send ping every 5 seconds for aggressive detection
-      
-      ;(socketRef.current as any).heartbeatInterval = heartbeatInterval
+
+        ; (socketRef.current as any).heartbeatInterval = heartbeatInterval
     })
-    
+
     socketRef.current.on('disconnect', (reason) => {
       console.log(`🔌 TranslationApp disconnected: ${reason}`)
       setIsConnecting(false)
       setIsConnected(false)
-      
+
       // Clear heartbeat interval
       if ((socketRef.current as any)?.heartbeatInterval) {
         clearInterval((socketRef.current as any).heartbeatInterval)
       }
     })
-    
+
     socketRef.current.on('connect_error', (error) => {
       console.error('🔗 TranslationApp - Connection error:', error)
       setIsConnecting(false)
       setIsConnected(false)
     })
-    
+
     socketRef.current.on('speakerTyping', (data: { isTyping: boolean }) => {
       setIsSpeakerTyping(data.isTyping)
     })
-    
+
     socketRef.current.on('translationComplete', (data) => {
       // Immediately acknowledge receipt if messageId is present (guaranteed delivery system)
       if (data.messageId && socketRef.current?.connected) {
         socketRef.current.emit('translationAck', { messageId: data.messageId })
         console.log(`✅ Acknowledged message: ${data.messageId}`)
       }
-      
+
       // Track source language from the speaker
       if (data.sourceLanguage) {
         setSourceLanguage(data.sourceLanguage)
       }
-      
+
       const bubbleId = data.bubbleId || Date.now().toString()
       const translatedText = data.translatedText || 'Translation failed'
       const originalText = data.originalText || 'Unknown'
       const messageId = data.messageId
-      
+
       // Idempotent display: Check if we've already displayed this messageId
       if (messageId && processedMessageIdsRef.current.has(messageId)) {
         console.log(`⚠️ [Idempotent] Skipping already displayed messageId: ${messageId}`)
         return
       }
-      
+
       // Create a unique key combining bubbleId AND text for true duplicate detection
       // Only skip if we've seen this EXACT combination before
       const dedupeKey = `${bubbleId}:${originalText.trim()}`
-      
+
       if (processedTranslationsRef.current.has(dedupeKey)) {
         console.log('⚠️ Skipping true duplicate:', dedupeKey.substring(0, 60))
         return
       }
-      
+
       // Mark messageId as processed for idempotent display
       if (messageId) {
         processedMessageIdsRef.current.add(messageId)
@@ -638,38 +654,38 @@ function TranslationApp() {
           processedMessageIdsRef.current.delete(iterator.next().value)
         }
       }
-      
+
       // Mark as processed
       processedTranslationsRef.current.add(dedupeKey)
-      
+
       // Limit the size to prevent memory bloat (keep last 200 entries)
       if (processedTranslationsRef.current.size > 200) {
         const iterator = processedTranslationsRef.current.values()
         processedTranslationsRef.current.delete(iterator.next().value)
       }
-      
+
       const newBubble: TranslationBubble = {
         id: `${bubbleId}-${Date.now()}`, // Make ID unique to prevent React key issues
         originalText: originalText,
         translatedText: translatedText,
         sourceLanguage: data.sourceLanguage || 'unknown',
-        targetLanguage: (data.targetLanguage && isValidCTLanguageCode(data.targetLanguage)) 
-          ? data.targetLanguage as GoogleCTLanguageCode 
+        targetLanguage: (data.targetLanguage && isValidCTLanguageCode(data.targetLanguage))
+          ? data.targetLanguage as GoogleCTLanguageCode
           : targetLanguage,
         timestamp: new Date(),
         isComplete: true,
         hasBeenRead: false,
         messageId: messageId // Store for recovery tracking
       }
-      
+
       setTranslationBubbles(prev => [...prev, newBubble])
-      
+
       // Queue TTS for new translation
       if (data.translatedText && queueSpeechRef.current) {
         queueSpeechRef.current(data.translatedText)
       }
     })
-    
+
     socketRef.current.on('translationError', (data) => {
       const newBubble: TranslationBubble = {
         id: data.bubbleId || Date.now().toString(),
@@ -680,17 +696,17 @@ function TranslationApp() {
         timestamp: new Date(),
         isComplete: true
       }
-      
+
       setTranslationBubbles(prev => [...prev, newBubble])
     })
-    
+
     // Listen for source language updates from the speaker
     socketRef.current.on('sourceLanguageUpdate', (data: { sourceLanguage: string }) => {
       if (data.sourceLanguage) {
         setSourceLanguage(data.sourceLanguage)
       }
     })
-    
+
     socketRef.current.on('connect_error', (error) => {
       console.error('❌ Connection error:', error)
       setIsConnecting(false)
@@ -701,7 +717,7 @@ function TranslationApp() {
       console.log(`🔄 TranslationApp reconnected after ${attemptNumber} attempts`)
       setIsConnecting(false)
       setIsConnected(true)
-      
+
       // Only re-establish target language if user has already joined (not on landing page)
       // Use refs to avoid stale closure issues
       const currentTargetLanguage = targetLanguageRef.current
@@ -709,7 +725,7 @@ function TranslationApp() {
       if (currentTargetLanguage && !isOnLandingPage) {
         console.log(`🔗 Re-establishing target language after reconnect: ${currentTargetLanguage}`)
         socketRef.current?.emit('setTargetLanguage', { targetLanguage: currentTargetLanguage })
-        
+
         // Request any missed messages that were sent during disconnection
         console.log('📬 Requesting missed messages after reconnect')
         socketRef.current?.emit('requestMissedMessages')
@@ -732,13 +748,13 @@ function TranslationApp() {
       // Track successful pong - connection is healthy
       lastPongTimeRef.current = Date.now()
       awaitingPongRef.current = false
-      
+
       // Clear visibility verification timeout if pending
       if ((socketRef.current as any)?.visibilityVerifyTimeout) {
         clearTimeout((socketRef.current as any).visibilityVerifyTimeout)
-        ;(socketRef.current as any).visibilityVerifyTimeout = null
+          ; (socketRef.current as any).visibilityVerifyTimeout = null
       }
-      
+
       // Reset missed count and quality on successful pong
       if (missedPongCountRef.current > 0) {
         console.log('✅ Connection recovered, pong received')
@@ -767,19 +783,19 @@ function TranslationApp() {
         visibilityHiddenTimeRef.current = Date.now()
       } else if (document.visibilityState === 'visible') {
         // App returning to foreground
-        const hiddenDuration = visibilityHiddenTimeRef.current 
-          ? Date.now() - visibilityHiddenTimeRef.current 
+        const hiddenDuration = visibilityHiddenTimeRef.current
+          ? Date.now() - visibilityHiddenTimeRef.current
           : 0
         visibilityHiddenTimeRef.current = null
-        
+
         console.log(`👁️ App foregrounded after ${Math.round(hiddenDuration / 1000)}s`)
-        
+
         // If socket exists, verify connection immediately
         if (socketRef.current) {
           // Send immediate ping to verify connection
           awaitingPongRef.current = true
           socketRef.current.emit('ping')
-          
+
           // If no pong received within 3 seconds, force reconnect
           const verifyTimeout = setTimeout(() => {
             if (awaitingPongRef.current && socketRef.current) {
@@ -788,15 +804,15 @@ function TranslationApp() {
               socketRef.current.disconnect()
             }
           }, 3000)
-          
-          // Store timeout so it can be cleared if pong arrives
-          ;(socketRef.current as any).visibilityVerifyTimeout = verifyTimeout
+
+            // Store timeout so it can be cleared if pong arrives
+            ; (socketRef.current as any).visibilityVerifyTimeout = verifyTimeout
         }
       }
     }
-    
+
     document.addEventListener('visibilitychange', handleVisibilityChange)
-    
+
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       // Clear any pending verification timeout
@@ -832,24 +848,24 @@ function TranslationApp() {
       <LandingPageContainer>
         <LandingCard elevation={3} sx={{ gap: '1rem', padding: '1rem' }}>
           <Box sx={{ height: '5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', marginTop: '1.5rem', marginBottom: '1rem' }}>
-            <img 
-              src="/scribe-logo-name-transparent.png" 
-              alt="Scribe" 
+            <img
+              src="/scribe-logo-name-transparent.png"
+              alt="Scribe"
               style={{ height: '100%', width: 'auto' }}
             />
           </Box>
-          
+
           <Typography variant="sectionHeader" sx={{ fontSize: '1.25rem', textAlign: 'center' }}>
             Join Translation Session
           </Typography>
-          
+
           <Typography variant="bodyText" sx={{ textAlign: 'center', color: 'text.secondary' }}>
-            {attemptedUserCode ? 
+            {attemptedUserCode ?
               `The user code "${attemptedUserCode}" is not valid. Please enter a different user code.` :
               'Enter the user code provided by the speaker to join their live translation session.'
             }
           </Typography>
-          
+
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: '1rem', width: '100%', maxWidth: '300px' }}>
             <TextField
               label="User Code"
@@ -874,7 +890,7 @@ function TranslationApp() {
                 }
               }}
             />
-            
+
             <Button
               variant="contained"
               color="primary"
@@ -897,7 +913,7 @@ function TranslationApp() {
               )}
             </Button>
           </Box>
-          
+
           <Typography variant="bodyText" sx={{ textAlign: 'center', color: 'text.secondary', fontSize: '0.9rem' }}>
             Or scan the QR code from the speaker's device to join automatically.
           </Typography>
@@ -911,38 +927,38 @@ function TranslationApp() {
       <LandingPageContainer>
         <LandingCard elevation={3} sx={{ gap: '1rem', padding: '1rem' }}>
           <Box sx={{ height: '5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', marginTop: '1.5rem', marginBottom: '1rem' }}>
-            <img 
-              src="/scribe-logo-name-transparent.png" 
-              alt="Scribe" 
+            <img
+              src="/scribe-logo-name-transparent.png"
+              alt="Scribe"
               style={{ height: '100%', width: 'auto' }}
             />
           </Box>
-          
+
           <Typography variant="sectionHeader" sx={{ fontSize: '1.25rem', textAlign: 'center' }}>
             Real-time Translation
           </Typography>
-          
+
           <Typography variant="bodyText" sx={{ textAlign: 'center', color: 'text.secondary' }}>
             Choose your preferred language to receive live translations from the speaker
           </Typography>
-          
+
           <LanguageSelectionSection>
             <Typography variant="subsectionHeader" sx={{ textAlign: 'center', marginTop: '1rem' }}>
               Select Target Language
             </Typography>
-            
+
             <OutputLanguageSelector
               label="Language"
               selectedLanguage={targetLanguage || GoogleCTLanguageCode.EN_US}
               onLanguageChange={handleTargetLanguageChange}
               sourceLanguage={sourceLanguage}
             />
-            
+
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', width: '100%', maxWidth: '300px' }}>
               <Typography variant="bodyText" sx={{ textAlign: 'center', color: 'text.secondary', fontSize: '0.9rem' }}>
                 User Code: <strong>{userCode}</strong>
               </Typography>
-              
+
               <Button
                 variant="outlined"
                 color="secondary"
@@ -961,7 +977,7 @@ function TranslationApp() {
                 Change User Code
               </Button>
             </Box>
-            
+
             <StartButton
               variant="contained"
               color="primary"
@@ -974,6 +990,10 @@ function TranslationApp() {
               }}
               disabled={!targetLanguage}
               sx={{
+                borderRadius: '1rem',
+                padding: '0.5rem',
+                fontSize: '1rem',
+                fontWeight: '600',
                 marginTop: '1rem',
                 '&:disabled': {
                   opacity: 0.5,
@@ -1002,16 +1022,23 @@ function TranslationApp() {
               sx={{
                 borderRadius: '1rem',
                 minWidth: 'auto',
-                padding: '0.5rem 1rem'
+                padding: '0.4rem',
+                marginBottom: 0,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
               }}
             >
-              Back
             </BackButton>
-            <Typography variant="subsectionHeader" sx={{ fontSize: '1rem', fontWeight: '600' }}>
-              {getCTLanguageInfo(targetLanguage).name} {createHybridFlagElement(targetLanguage, 20)}
+            <Typography variant="subsectionHeader" sx={{ fontSize: '1rem', fontWeight: '600', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginBottom: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              {(() => {
+                const name = getCTLanguageInfo(targetLanguage).name;
+                const words = name.split(' ');
+                return words.length > 1 ? `${words[0]}...` : words[0];
+              })()} {createHybridFlagElement(targetLanguage, 20)}
             </Typography>
           </MobileHeaderLeft>
-          
+
           <MobileHeaderRight>
             {ttsAvailable && (
               <Tooltip title={ttsEnabled ? 'Disable read aloud' : 'Enable read aloud'} arrow>
@@ -1060,7 +1087,8 @@ function TranslationApp() {
             onClick={handleBackToLanguageSelection}
             sx={{
               borderRadius: '2rem',
-              marginBottom: '1rem'
+              marginBottom: '1rem',
+              alignSelf: 'flex-start'
             }}
           >
             Change Language
@@ -1068,9 +1096,9 @@ function TranslationApp() {
 
           <HeaderSection isMobile={isMobile}>
             <Box sx={{ height: '5rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <img 
-                src="/scribe-logo-name-transparent.png" 
-                alt="Scribe" 
+              <img
+                src="/scribe-logo-name-transparent.png"
+                alt="Scribe"
                 style={{ height: '100%', width: 'auto' }}
               />
             </Box>
@@ -1095,7 +1123,7 @@ function TranslationApp() {
               />
             )}
           </ConnectionStatusContainer>
-          
+
           {/* Text-to-Speech Toggle Button */}
           {ttsAvailable && (
             <Box sx={{ marginBottom: '1rem' }}>
@@ -1120,18 +1148,18 @@ function TranslationApp() {
               >
                 {ttsEnabled ? (isSpeaking ? 'Reading...' : 'Read Aloud On') : 'Read Aloud Off'}
               </Button>
-              <Typography 
-                variant="captionText" 
-                sx={{ 
-                  display: 'block', 
-                  textAlign: 'center', 
+              <Typography
+                variant="captionText"
+                sx={{
+                  display: 'block',
+                  textAlign: 'center',
                   marginTop: '0.5rem',
                   color: 'text.secondary',
                   fontSize: '0.75rem'
                 }}
               >
-                {ttsEnabled 
-                  ? 'Translations will be read aloud as they arrive' 
+                {ttsEnabled
+                  ? 'Translations will be read aloud as they arrive'
                   : 'Enable to hear translations spoken'}
               </Typography>
             </Box>
@@ -1162,8 +1190,8 @@ function TranslationApp() {
               </EmptyState>
             ) : (
               translationBubbles.slice().reverse().map((bubble) => (
-                <MessageBubble 
-                  key={bubble.id} 
+                <MessageBubble
+                  key={bubble.id}
                   elevation={3}
                   isRTL={isRTLLanguage(bubble.targetLanguage)}
                 >
@@ -1176,15 +1204,15 @@ function TranslationApp() {
           </BubblesContainer>
         </RightPanelContent>
       </RightPanel>
-      
+
       {/* Connection quality warning */}
       <Snackbar
         open={connectionQuality === 'unstable'}
         anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
         sx={{ top: { xs: 70, sm: 24 } }}
       >
-        <Alert 
-          severity="warning" 
+        <Alert
+          severity="warning"
           variant="filled"
           sx={{ borderRadius: '1rem' }}
         >

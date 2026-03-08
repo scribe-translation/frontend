@@ -19,8 +19,8 @@ RUN npm run build
 # Production stage
 FROM node:20-alpine AS production
 
-# Install http-server globally
-RUN npm install -g http-server
+# Install serve (SPA fallback: serve index.html for routes like /reset-password)
+RUN npm install -g serve
 
 # Set working directory
 WORKDIR /app
@@ -43,5 +43,5 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD wget --no-verbose --tries=1 --spider http://localhost:8080/ || exit 1
 
-# Start the server
-CMD ["http-server", "dist", "-p", "8080", "-a", "0.0.0.0", "--cors"]
+# -s: SPA mode (rewrite all not-found requests to index.html so client-side routes work)
+CMD ["serve", "dist", "-s", "-l", "8080"]

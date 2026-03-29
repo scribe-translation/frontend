@@ -14,7 +14,7 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import { useNavigate } from 'react-router-dom'
 import Typography from '../UI/Typography'
 import ProfileContent from './ProfileContent'
-import SermonHistoryList from './SermonHistoryList'
+import SessionHistoryList from './SessionHistoryList'
 import { useAuth } from '../../contexts/AuthContext'
 
 interface TabPanelProps {
@@ -99,7 +99,7 @@ const ProfilePage: React.FC = () => {
 
           <Box sx={{ px: { xs: 0, md: 4 }, minHeight: '60vh' }}>
             <TabPanel value={tabValue} index={0}>
-              <SermonHistoryList />
+              <SessionHistoryList />
             </TabPanel>
             <TabPanel value={tabValue} index={1}>
               <ProfileContent user={user} />

@@ -1,21 +1,29 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import InputLanguageSelector from '../InputLanguageSelector'
 import DeviceSelector from './DeviceSelector'
+import RecordingPreferences from './RecordingPreferences'
 import Typography from '../UI/Typography'
 import { getSTTLanguageInfo, GoogleSTTLanguageCode } from '../../enums/googleSTTLangs'
 import { getCTLanguageInfo, isValidCTLanguageCode } from '../../enums/googleCTLangs'
-import { Paper, Chip, Button, Box, IconButton, useMediaQuery, useTheme, Dialog, DialogTitle, DialogContent, DialogActions, CircularProgress, Tooltip, Snackbar, Alert, Slider } from '@mui/material'
+import { Paper, Chip, Button, Box, IconButton, useMediaQuery, useTheme, Dialog, DialogTitle, DialogContent, DialogActions, CircularProgress, Tooltip, Snackbar, Alert, Slider, FormControlLabel, Checkbox, FormGroup, Divider, Collapse } from '@mui/material'
 import PeopleIcon from '@mui/icons-material/People'
 import DownloadIcon from '@mui/icons-material/Download'
 import LogoutIcon from '@mui/icons-material/Logout'
 import QrCodeIcon from '@mui/icons-material/QrCode'
 import AccountBoxIcon from '@mui/icons-material/AccountBox';
+import DescriptionIcon from '@mui/icons-material/Description';
+import FacebookIcon from '@mui/icons-material/Facebook';
+import SaveIcon from '@mui/icons-material/Save';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import StopIcon from '@mui/icons-material/Stop';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { io, Socket } from 'socket.io-client'
 import styled, { keyframes } from 'styled-components'
 import { CONFIG } from '../../config/urls'
 import { useAuth } from '../../contexts/AuthContext'
 import { useUserCode } from '../../contexts/SessionContext'
-import ProfileModal from '../Profile/ProfileModal'
+// ProfileModal removed in favor of full page /profile
 import googleSpeechService from '../../services/googleSpeechService'
 import { setCookie, getCookie } from '../../utils/cookieUtils'
 import { createHybridFlagElement } from '../../utils/flagEmojiUtils.tsx'
@@ -194,15 +202,8 @@ const RightPanelContent = styled.div<{ isMobile: boolean }>`
 
 function InputApp() {
   // Initialize source language from cookie or default
-  const getInitialSourceLanguage = (): GoogleSTTLanguageCode => {
-    const savedLanguage = getCookie('scribe-source-language')
-    if (savedLanguage && Object.values(GoogleSTTLanguageCode).includes(savedLanguage as GoogleSTTLanguageCode)) {
-      return savedLanguage as GoogleSTTLanguageCode
-    }
-    return GoogleSTTLanguageCode.EN_US
-  }
-
-  const [sourceLanguage, setSourceLanguage] = useState<GoogleSTTLanguageCode>(getInitialSourceLanguage())
+  const [sourceLanguage, setSourceLanguage] = useState<GoogleSTTLanguageCode>('en-CA')
+  const [settingsExpanded, setSettingsExpanded] = useState(true)
   const [connectionCount, setConnectionCount] = useState<{ total: number, byLanguage: Record<string, number> }>({ total: 0, byLanguage: {} })
 
   // Handle source language change and save to cookie
@@ -287,7 +288,29 @@ function InputApp() {
   const [qrModalOpen, setQrModalOpen] = useState(false)
   const [isSocketConnecting, setIsSocketConnecting] = useState(false)
   const [isSocketConnected, setIsSocketConnected] = useState(false)
-  const [profileModalOpen, setProfileModalOpen] = useState(false)
+  
+  const navigate = useNavigate()
+  const location = useLocation()
+  const [confirmDialogOpen, setConfirmDialogOpen] = useState(false)
+  
+  // Recording preferences state (per-session, initialized from localStorage)
+  const [recordingPrefs, setRecordingPrefs] = useState(() => {
+    const saved = localStorage.getItem('scribe_recording_prefs')
+    return saved ? JSON.parse(saved) : {
+      storeText: true,
+      generateSummary: true,
+      generateFacebookPost: true
+    }
+  })
+
+  // Persist preferences to localStorage when they change
+  useEffect(() => {
+    localStorage.setItem('scribe_recording_prefs', JSON.stringify(recordingPrefs))
+    // Also notify backend if socket is connected
+    if (isSocketConnected && socketRef.current) {
+      socketRef.current.emit('updateRecordingPrefs', recordingPrefs)
+    }
+  }, [recordingPrefs, isSocketConnected])
   const [connectionInfo, setConnectionInfo] = useState<{ userCode: string, connectionUrl: string, qrCodeUrl: string, shareText: string } | null>(null)
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null)
   const [speechConfig, setSpeechConfig] = useState({
@@ -946,71 +969,120 @@ function InputApp() {
   return (
     <MainContainer isMobile={isMobile}>
       {isMobile ? (
-        <MobileHeader elevation={3}>
-          <MobileHeaderLeft>
-            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
-              <Tooltip title="View Profile" arrow placement="bottom">
-                <Box
-                  sx={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.5rem',
-                    cursor: 'pointer',
-                    padding: '0.25rem',
-                    borderRadius: '0.5rem',
-                    '&:hover': {
-                      backgroundColor: 'rgba(210, 180, 140, 0.1)',
-                      transform: 'scale(1.02)'
-                    },
-                    transition: 'all 0.2s ease-in-out'
-                  }}
-                  onClick={() => setProfileModalOpen(true)}
-                >
-                  <AccountBoxIcon sx={{ fontSize: 20, color: 'primary.main' }} />
-                  <Typography variant="bodyText" sx={{
-                    color: 'text.secondary',
-                    fontSize: '0.8rem',
-                    display: 'flex',
-                    alignItems: 'center'
-                  }}>
-                    {user?.name}
-                  </Typography>
-                </Box>
-              </Tooltip>
-            </Box>
-          </MobileHeaderLeft>
-
-          <MobileHeaderRight>
-            {isSocketConnecting ? (
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <CircularProgress size={16} />
-                <Typography variant="captionText" sx={{ fontSize: '0.75rem' }}>
-                  Connecting...
+        <Box sx={{ display: 'flex', flexDirection: 'column', width: '100%', gap: '10px' }}>
+          {/* Top Row: Profile, Language, QR Code */}
+          <Box sx={{ display: 'flex', gap: '8px', width: '100%' }}>
+            <Box 
+              onClick={() => navigate('/profile')}
+              sx={{ flex: 1, minWidth: 0, backgroundColor: '#435A73', borderRadius: '14px', height: '48px', display: 'flex', alignItems: 'center', padding: '0 8px', gap: '6px', cursor: 'pointer', '&:hover': { backgroundColor: '#3A5068' } }}
+            >
+              <Box sx={{ width: 18, height: 18, borderRadius: '6px', backgroundColor: '#9FB6CC', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <AccountBoxIcon sx={{ fontSize: 16, color: '#435A73' }} />
+              </Box>
+              <Typography noWrap sx={{ color: '#D7E4F2', fontSize: '11px', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' }}>{user?.name}</Typography>
+              <Box sx={{ backgroundColor: '#3A5068', borderRadius: '999px', padding: '2px 6px', display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0, marginLeft: 'auto' }}>
+                {isSocketConnecting ? <CircularProgress size={10} color="inherit" /> : <PeopleIcon sx={{ color: '#AFC6DD', fontSize: 12 }} />}
+                <Typography sx={{ color: '#AFC6DD', fontSize: '10px', fontWeight: 'bold' }}>
+                  {connectionCount.total - 1 < 0 ? '0' : connectionCount.total - 1}
                 </Typography>
               </Box>
-            ) : (
-              <Chip
-                label={`${connectionCount.total - 1 < 0 ? 'No' : connectionCount.total - 1} connection${connectionCount.total - 1 === 1 ? '' : 's'}`}
-                color={isSocketConnected ? "primary" : "error"}
-                variant="outlined"
-                size="small"
+            </Box>
+            
+            <Box sx={{ flex: 1, minWidth: 0 }}>
+              <InputLanguageSelector
+                label="Source Language"
+                selectedLanguage={sourceLanguage}
+                onLanguageChange={handleSourceLanguageChange}
+                compact
               />
-            )}
-            <IconButton
-              onClick={logout}
-              color="primary"
-              size="small"
-              sx={{
-                borderRadius: '50%',
-                '&:hover': {
-                  backgroundColor: 'rgba(210, 180, 140, 0.1)'
-                }
+            </Box>
+            
+            <IconButton 
+              onClick={() => setQrModalOpen(true)} 
+              sx={{ backgroundColor: '#435A73', borderRadius: '14px', height: '48px', width: '48px', flexShrink: 0, '&:hover': { backgroundColor: '#3A5068' } }}
+            >
+              <QrCodeIcon sx={{ color: '#D7E4F2' }} />
+            </IconButton>
+          </Box>
+
+          {/* Second Row: Settings Toggle & Play/Stop */}
+          <Box sx={{ display: 'flex', gap: '8px', width: '100%' }}>
+            <Box 
+              onClick={() => setSettingsExpanded(!settingsExpanded)} 
+              sx={{ flex: 1, height: '48px', backgroundColor: '#4E647C', borderRadius: '14px', display: 'flex', alignItems: 'center', padding: '0 14px', cursor: 'pointer', justifyContent: 'space-between' }}
+            >
+              <Typography sx={{ color: '#E2EDF8', fontSize: 14, fontWeight: 600 }}>Recording Settings</Typography>
+              <ExpandMoreIcon sx={{ color: '#E2EDF8', transform: settingsExpanded ? 'rotate(180deg)' : 'none', transition: '0.3s' }} />
+            </Box>
+            <Button
+              disabled={!isServiceReady}
+              onClick={() => {
+                if (isTranslating) setShouldBeListening(false)
+                else setConfirmDialogOpen(true)
+              }}
+              sx={{ 
+                minWidth: '64px', width: '64px', height: '48px', 
+                backgroundColor: isTranslating ? '#F44336' : '#AFC6DD', 
+                borderRadius: '14px', color: '#2E455E', 
+                '&:hover': { backgroundColor: isTranslating ? '#D32F2F' : '#9FB6CC' } 
               }}
             >
-              <LogoutIcon />
-            </IconButton>
-          </MobileHeaderRight>
-        </MobileHeader>
+              {isTranslating ? <StopIcon /> : <PlayArrowIcon />}
+            </Button>
+          </Box>
+
+          <Collapse in={settingsExpanded}>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: '8px', mt: '4px' }}>
+              <RecordingPreferences 
+                recordingPrefs={recordingPrefs} 
+                setRecordingPrefs={setRecordingPrefs} 
+              />
+              <Box sx={{ backgroundColor: 'rgba(255, 255, 255, 0.05)', borderRadius: '1rem', padding: '1rem' }}>
+                <DeviceSelector
+                  selectedDeviceId={selectedDeviceId}
+                  onDeviceChange={setSelectedDeviceId}
+                  disabled={isTranslating}
+                />
+                <Box sx={{ marginTop: '1rem' }}>
+                  <Tooltip title="Lower values reduce background noise, breathing, and static. Adjust in real-time during recording.">
+                    <Box sx={{ position: 'relative', width: '100%' }}>
+                      <Box
+                        sx={{
+                          position: 'absolute',
+                          left: 0,
+                          bottom: '8px',
+                          height: 4,
+                          width: `${audioLevel * 100}%`,
+                          backgroundColor: isTranslating ? 'primary.main' : 'rgba(155, 181, 209, 0.3)',
+                          borderRadius: '2px',
+                          transition: 'width 0.1s ease-out, background-color 0.2s',
+                          zIndex: 0,
+                        }}
+                      />
+                      <Slider
+                        value={microphoneGain}
+                        onChange={handleMicrophoneGainChange}
+                        min={0.0}
+                        max={1.5}
+                        step={0.05}
+                        disabled={!isServiceReady}
+                        sx={{
+                          position: 'relative',
+                          zIndex: 1,
+                          color: 'primary.main',
+                          '& .MuiSlider-thumb': { width: 16, height: 16 },
+                          '& .MuiSlider-track': { height: 4 },
+                          '& .MuiSlider-rail': { height: 4, opacity: 0.3 },
+                        }}
+                        marks={[{ value: 0.5, label: '50%' }, { value: 1.0, label: '100%' }]}
+                      />
+                    </Box>
+                  </Tooltip>
+                </Box>
+              </Box>
+            </Box>
+          </Collapse>
+        </Box>
       ) : (
         <LeftPanel elevation={3}>
           <Box sx={{ height: '7rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -1036,7 +1108,7 @@ function InputApp() {
                   },
                   transition: 'all 0.2s ease-in-out'
                 }}
-                onClick={() => setProfileModalOpen(true)}
+                onClick={() => navigate('/profile')}
               >
                 <AccountBoxIcon sx={{ fontSize: 32, color: 'primary.main' }} />
                 <Typography variant="bodyText" sx={{
@@ -1126,7 +1198,12 @@ function InputApp() {
           <InputLanguageSelector
             label="Source Language"
             selectedLanguage={sourceLanguage}
-            onLanguageChange={handleSourceLanguageChange}
+             onLanguageChange={handleSourceLanguageChange}
+          />
+
+          <RecordingPreferences 
+            recordingPrefs={recordingPrefs} 
+            setRecordingPrefs={setRecordingPrefs} 
           />
           <Box sx={{ marginTop: '1rem', padding: '1rem', backgroundColor: 'rgba(255, 255, 255, 0.05)', borderRadius: '1rem' }}>
             <DeviceSelector
@@ -1193,7 +1270,7 @@ function InputApp() {
               if (isTranslating) {
                 setShouldBeListening(false)
               } else {
-                setShouldBeListening(true)
+                setConfirmDialogOpen(true)
               }
             }}
           >
@@ -1251,105 +1328,7 @@ function InputApp() {
 
       <RightPanel elevation={3} isMobile={isMobile}>
         <RightPanelContent isMobile={isMobile}>
-          {isMobile && (
-            <Box sx={{ marginBottom: '1rem' }}>
-              <Box sx={{ display: 'flex', justifyContent: 'center', width: '100%' }}>
-                <InputLanguageSelector
-                  label="Source Language"
-                  selectedLanguage={sourceLanguage}
-                  onLanguageChange={handleSourceLanguageChange}
-                />
-              </Box>
-              <Box sx={{ marginTop: '1rem', width: '100%', backgroundColor: 'rgba(255, 255, 255, 0.05)', borderRadius: '1rem', padding: '1rem' }}>
-                <DeviceSelector
-                  selectedDeviceId={selectedDeviceId}
-                  onDeviceChange={setSelectedDeviceId}
-                  disabled={isTranslating}
-                />
-                <Box>
-                  <Tooltip title="Lower values reduce background noise, breathing, and static. Adjust in real-time during recording.">
-                    <Box sx={{ position: 'relative', width: '100%' }}>
-                      <Box
-                        sx={{
-                          position: 'absolute',
-                          left: 0,
-                          bottom: '8px',
-                          height: 4,
-                          width: `${audioLevel * 100}%`,
-                          backgroundColor: isTranslating ? 'primary.main' : 'rgba(155, 181, 209, 0.3)',
-                          borderRadius: '2px',
-                          transition: 'width 0.1s ease-out, background-color 0.2s',
-                          zIndex: 0,
-                        }}
-                      />
-                      <Slider
-                        value={microphoneGain}
-                        onChange={handleMicrophoneGainChange}
-                        min={0.0}
-                        max={1.5}
-                        step={0.05}
-                        disabled={!isServiceReady}
-                        sx={{
-                          position: 'relative',
-                          zIndex: 1,
-                          color: 'primary.main',
-                          '& .MuiSlider-thumb': {
-                            width: 16,
-                            height: 16,
-                          },
-                          '& .MuiSlider-track': {
-                            height: 4,
-                          },
-                          '& .MuiSlider-rail': {
-                            height: 4,
-                            opacity: 0.3,
-                          },
-                        }}
-                        marks={[
-                          { value: 0.5, label: '50%' },
-                          { value: 1.0, label: '100%' },
-                        ]}
-                      />
-                    </Box>
-                  </Tooltip>
-                </Box>
-              </Box>
-              <Box sx={{ display: 'flex', gap: '1rem', marginTop: '1rem' }}>
-                <Button
-                  variant="outlined"
-                  startIcon={<QrCodeIcon />}
-                  onClick={() => setQrModalOpen(true)}
-                  sx={{
-                    flex: 1,
-                    borderRadius: '2rem',
-                    padding: '0.5rem'
-                  }}
-                >
-                  QR Code
-                </Button>
-                <Button
-                  variant="contained"
-                  color="primary"
-                  fullWidth
-                  disabled={!isServiceReady}
-                  sx={{
-                    flex: 1,
-                    borderRadius: '2rem',
-                    padding: '0.5rem'
-                  }}
-                  onClick={() => {
-                    if (isTranslating) {
-                      setShouldBeListening(false)
-                    } else {
-                      setShouldBeListening(true)
-                    }
-                  }}
-                >
-                  {!isServiceReady ? 'Initializing...' : isTranslating ? 'Translating...' : 'Translate'}
-                </Button>
-              </Box>
-            </Box>
-          )}
+
 
           <BubblesContainer>
             {currentTranscription && (
@@ -1455,13 +1434,74 @@ function InputApp() {
         </DialogActions>
       </Dialog>
 
-      <ProfileModal
-        open={profileModalOpen}
-        onClose={() => setProfileModalOpen(false)}
-        user={user}
-        isSocketConnected={isSocketConnected}
-        onLogout={logout}
-      />
+      {/* Confirm Session Dialog */}
+      <Dialog 
+        open={confirmDialogOpen} 
+        onClose={() => setConfirmDialogOpen(false)}
+        PaperProps={{
+          sx: { borderRadius: '1.5rem', padding: '1rem', backgroundColor: 'background.paper' }
+        }}
+      >
+        <DialogTitle>
+          <Typography variant="sectionHeader" sx={{ marginBottom: 0 }}>Confirm Recording</Typography>
+        </DialogTitle>
+        <DialogContent>
+          <Typography variant="bodyText" sx={{ marginBottom: '1.5rem' }}>
+            You are about to start a new recording session. Please confirm your preferences:
+          </Typography>
+          
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+              <SaveIcon color={recordingPrefs.storeText ? "primary" : "disabled"} />
+              <Box>
+                <Typography variant="bodyText" sx={{ fontWeight: 'bold' }}>Store Session</Typography>
+                <Typography variant="captionText">
+                  {recordingPrefs.storeText ? "Text will be saved to your history." : "Nothing will be saved."}
+                </Typography>
+              </Box>
+            </Box>
+            
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: '1rem', opacity: recordingPrefs.storeText ? 1 : 0.5 }}>
+              <DescriptionIcon color={recordingPrefs.generateSummary && recordingPrefs.storeText ? "primary" : "disabled"} />
+              <Box>
+                <Typography variant="bodyText" sx={{ fontWeight: 'bold' }}>AI Summary</Typography>
+                <Typography variant="captionText">
+                  {recordingPrefs.generateSummary && recordingPrefs.storeText ? "An AI summary will be generated." : "No summary will be created."}
+                </Typography>
+              </Box>
+            </Box>
+            
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: '1rem', opacity: recordingPrefs.storeText ? 1 : 0.5 }}>
+              <FacebookIcon color={recordingPrefs.generateFacebookPost && recordingPrefs.storeText ? "primary" : "disabled"} />
+              <Box>
+                <Typography variant="bodyText" sx={{ fontWeight: 'bold' }}>Facebook Post</Typography>
+                <Typography variant="captionText">
+                  {recordingPrefs.generateFacebookPost && recordingPrefs.storeText ? "A Facebook post draft will be generated." : "No post draft will be created."}
+                </Typography>
+              </Box>
+            </Box>
+          </Box>
+          
+          <Alert severity="info" sx={{ marginTop: '2rem', borderRadius: '1rem' }}>
+            You can see and change these settings anytime in the left sidebar.
+          </Alert>
+        </DialogContent>
+        <DialogActions sx={{ padding: '1rem 1.5rem' }}>
+          <Button onClick={() => setConfirmDialogOpen(false)} color="inherit" sx={{ borderRadius: '1rem' }}>
+            Cancel
+          </Button>
+          <Button 
+            onClick={() => {
+              setConfirmDialogOpen(false)
+              setShouldBeListening(true)
+            }} 
+            variant="contained" 
+            sx={{ borderRadius: '1rem', px: 3 }}
+          >
+            Start Recording
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <Snackbar
         open={!!errorMessage}

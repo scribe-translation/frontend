@@ -11,6 +11,7 @@ import ProtectedRoute from './components/Auth/ProtectedRoute.tsx'
 import { AuthProvider } from './contexts/AuthContext'
 import { UserCodeProvider } from './contexts/SessionContext'
 import theme from './theme/theme'
+import ProfilePage from './components/Profile/ProfilePage.tsx'
 import './index.css'
 
 const App = () => {
@@ -26,6 +27,11 @@ const App = () => {
       <BrowserRouter>
         <Routes>
           <Route path="/reset-password" element={<ResetPasswordPage />} />
+          <Route path="/profile" element={
+            <ProtectedRoute fallback={<AuthPage />}>
+              <ProfilePage />
+            </ProtectedRoute>
+          } />
           <Route path="*" element={
             <ProtectedRoute fallback={<AuthPage />}>
               <InputApp />

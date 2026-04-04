@@ -92,16 +92,13 @@ const ProfilePage: React.FC = () => {
                 }
               }}
             >
-              <Tab label="History" id="profile-tab-0" />
-              <Tab label="Profile Info" id="profile-tab-1" />
+              <Tab label="Profile Info" id="profile-tab-0" />
+              <Tab label="History" id="profile-tab-1" />
             </Tabs>
           </Box>
 
           <Box sx={{ px: { xs: 0, md: 4 }, minHeight: '60vh' }}>
             <TabPanel value={tabValue} index={0}>
-              <SessionHistoryList />
-            </TabPanel>
-            <TabPanel value={tabValue} index={1}>
               <ProfileContent user={user} />
               <Box sx={{ display: 'flex', justifyContent: 'center', pb: 4 }}>
                 <Button
@@ -113,6 +110,9 @@ const ProfilePage: React.FC = () => {
                   Logout
                 </Button>
               </Box>
+            </TabPanel>
+            <TabPanel value={tabValue} index={1}>
+              <SessionHistoryList />
             </TabPanel>
           </Box>
         </Paper>

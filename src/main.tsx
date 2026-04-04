@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom/client'
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { ThemeProvider } from '@mui/material/styles'
 import CssBaseline from '@mui/material/CssBaseline'
-import InputApp from './components/Input/InputApp.tsx'
+import SpeakerShell from './components/Input/SpeakerShell.tsx'
 import TranslationApp from './components/Output/TranslationApp.tsx'
 import AuthPage from './components/Auth/AuthPage.tsx'
 import ResetPasswordPage from './components/Auth/ResetPasswordPage.tsx'
@@ -11,7 +11,6 @@ import ProtectedRoute from './components/Auth/ProtectedRoute.tsx'
 import { AuthProvider } from './contexts/AuthContext'
 import { UserCodeProvider } from './contexts/SessionContext'
 import theme from './theme/theme'
-import ProfilePage from './components/Profile/ProfilePage.tsx'
 import './index.css'
 
 const App = () => {
@@ -27,14 +26,9 @@ const App = () => {
       <BrowserRouter>
         <Routes>
           <Route path="/reset-password" element={<ResetPasswordPage />} />
-          <Route path="/profile" element={
-            <ProtectedRoute fallback={<AuthPage />}>
-              <ProfilePage />
-            </ProtectedRoute>
-          } />
           <Route path="*" element={
             <ProtectedRoute fallback={<AuthPage />}>
-              <InputApp />
+              <SpeakerShell />
             </ProtectedRoute>
           } />
         </Routes>

@@ -55,6 +55,8 @@ class GoogleSpeechService {
   private silenceStartTime: number | null = null; // Track when silence started
   private lastInterimResultTime: number = 0; // Track when we last received an interim result from Google Cloud
   private streamHealthCheckInterval: NodeJS.Timeout | null = null; // For detecting hung streams
+  /** Suppress duplicate Google isFinal after client-side silence finalization for the same bubble */
+  private lastClientFinalizedBubbleId: string | null = null;
 
   constructor() {
     this.config = {
@@ -118,7 +120,15 @@ class GoogleSpeechService {
           if (!isCurrentBubble && !isPreviousBubble) {
             return;
           }
-          
+
+          if (
+            this.lastClientFinalizedBubbleId &&
+            data.bubbleId === this.lastClientFinalizedBubbleId
+          ) {
+            this.lastClientFinalizedBubbleId = null;
+            return;
+          }
+
           if (this.callbacks?.onFinalResult) {
             this.callbacks.onFinalResult({
               transcript: data.transcript,
@@ -173,7 +183,9 @@ class GoogleSpeechService {
       
       // Listen for stream restart notifications
       this.socket.on('streamRestarted', (data: any) => {
-        this.currentBubbleId = data.newBubbleId;
+        if (data?.newBubbleId != null && data.newBubbleId !== '') {
+          this.currentBubbleId = data.newBubbleId;
+        }
         this.hasReceivedFinalResult = false;
       });
       
@@ -181,6 +193,7 @@ class GoogleSpeechService {
       // We MUST update bubbleId here so the new stream uses a different ID than the old stream
       this.socket.on('streamRestartPending', (data: any) => {
         if (this.isRecording) {
+          this.lastClientFinalizedBubbleId = null;
           // Save current bubble ID as previous to allow late FINAL results to come through
           this.previousBubbleId = this.currentBubbleId;
           // Generate new bubble ID IMMEDIATELY so new stream uses different ID
@@ -199,6 +212,7 @@ class GoogleSpeechService {
           if (data.reason === 'language_changed') {
             // Clear all state for language change
             this.currentTranscript = '';
+            this.lastClientFinalizedBubbleId = null;
             this.previousBubbleId = null; // Don't accept late results from old language
             this.currentBubbleId = this.generateBubbleId();
             this.hasReceivedFinalResult = false;
@@ -214,6 +228,7 @@ class GoogleSpeechService {
             }
           } else {
             // For other restart reasons, save current state
+            this.lastClientFinalizedBubbleId = null;
             // Save current bubble ID as previous to allow late results to come through
             this.previousBubbleId = this.currentBubbleId;
             // Generate new bubble ID and continue recording
@@ -333,6 +348,7 @@ class GoogleSpeechService {
     this.isPaused = false;
     this.previousBubbleId = null; // Clear any previous bubble ID when starting fresh
     this.currentBubbleId = this.generateBubbleId();
+    this.lastClientFinalizedBubbleId = null;
     this.currentWordCount = 0;
     this.currentTranscript = '';
     this.hasReceivedFinalResult = false;
@@ -505,6 +521,7 @@ class GoogleSpeechService {
     // If language changed while recording, clear everything and generate new bubble ID
     if (languageChanged && this.isRecording) {
       this.currentTranscript = '';
+      this.lastClientFinalizedBubbleId = null;
       this.previousBubbleId = null; // Don't accept late results from old language
       this.currentBubbleId = this.generateBubbleId();
       this.hasReceivedFinalResult = false;
@@ -576,6 +593,7 @@ class GoogleSpeechService {
     this.callbacks = null;
     this.socket = null;
     this.hasReceivedFinalResult = false;
+    this.lastClientFinalizedBubbleId = null;
   }
 
   private generateBubbleId(): string {
@@ -823,7 +841,8 @@ class GoogleSpeechService {
             !this.hasReceivedFinalResult) {
           const finalTranscript = this.currentTranscript.trim();
           const finalBubbleId = this.currentBubbleId || this.generateBubbleId();
-          
+          this.lastClientFinalizedBubbleId = finalBubbleId;
+
           // Send final transcript to backend
           if (this.socket && this.socket.connected) {
             this.socket.emit('googleSpeechTranscription', {

@@ -22,7 +22,7 @@ import { io, Socket } from 'socket.io-client'
 import styled, { keyframes } from 'styled-components'
 import { CONFIG } from '../../config/urls'
 import { useAuth } from '../../contexts/AuthContext'
-import { useUserCode } from '../../contexts/SessionContext'
+import { useSessionCode } from '../../contexts/SessionContext'
 // ProfileModal removed in favor of full page /profile
 import googleSpeechService from '../../services/googleSpeechService'
 import { setCookie, getCookie } from '../../utils/cookieUtils'
@@ -310,7 +310,7 @@ function InputApp() {
       socketRef.current.emit('updateRecordingPrefs', recordingPrefs)
     }
   }, [recordingPrefs, isSocketConnected])
-  const [connectionInfo, setConnectionInfo] = useState<{ userCode: string, connectionUrl: string, qrCodeUrl: string, shareText: string } | null>(null)
+  const [connectionInfo, setConnectionInfo] = useState<{ sessionCode: string, connectionUrl: string, qrCodeUrl: string, shareText: string } | null>(null)
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null)
   const [speechConfig, setSpeechConfig] = useState({
     speechEndTimeout: 1, // Balanced timeout for natural speech patterns
@@ -336,7 +336,7 @@ function InputApp() {
   const wasStreamingBeforeDisconnectRef = React.useRef<boolean>(false) // Track streaming state for auto-resume
   const isTranslatingRef = React.useRef<boolean>(false) // Ref to track isTranslating for socket handlers
   const { user, tokens, logout, updateTokens, getConnectionInfo } = useAuth()
-  const { userCode, setUserCode, clearUserCode } = useUserCode()
+  const { sessionCode, setSessionCode, clearSessionCode } = useSessionCode()
   const theme = useTheme()
   const isMobile = useMediaQuery('(max-width: 850px)')
 
@@ -357,16 +357,16 @@ function InputApp() {
   }, [isTranslating])
 
   useEffect(() => {
-    if (tokens && user && user.userCode) {
-      // Always sync the userCode from AuthContext to UserCodeContext
-      if (userCode !== user.userCode) {
-        setUserCode(user.userCode)
+    if (tokens && user && user.sessionCode) {
+      // Always sync the sessionCode from AuthContext to SessionCodeContext
+      if (sessionCode !== user.sessionCode) {
+        setSessionCode(user.sessionCode)
       }
     }
-  }, [tokens, user, userCode, setUserCode])
+  }, [tokens, user, sessionCode, setSessionCode])
 
   useEffect(() => {
-    if (tokens && userCode) {
+    if (tokens && sessionCode) {
       const fetchConnectionInfo = async () => {
         try {
           const info = await getConnectionInfo()
@@ -377,10 +377,10 @@ function InputApp() {
       }
       fetchConnectionInfo()
     }
-  }, [tokens, userCode, getConnectionInfo])
+  }, [tokens, sessionCode, getConnectionInfo])
 
   useEffect(() => {
-    if (!tokens || !userCode) {
+    if (!tokens || !sessionCode) {
       setIsSocketConnecting(false)
       setIsSocketConnected(false)
       return
@@ -405,7 +405,7 @@ function InputApp() {
     socketRef.current = io(CONFIG.BACKEND_URL, {
       auth: {
         token: tokens.accessToken,
-        userCode: userCode
+        sessionCode: sessionCode
       },
       reconnection: true,
       reconnectionAttempts: 10,
@@ -700,7 +700,7 @@ function InputApp() {
       setIsSocketConnecting(false)
       setIsSocketConnected(false)
     }
-  }, [tokens, userCode])
+  }, [tokens, sessionCode])
 
   // Visibility change handler - verify connection when app returns from background
   useEffect(() => {

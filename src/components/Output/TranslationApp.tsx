@@ -267,6 +267,7 @@ function TranslationApp() {
   const [sourceLanguage, setSourceLanguage] = useState<string | undefined>(undefined) // Track source language from speaker
   const [translationBubbles, setTranslationBubbles] = useState<TranslationBubble[]>([])
   const [isSpeakerTyping, setIsSpeakerTyping] = useState(false) // Track if speaker is typing (interim transcription)
+  const [interimText, setInterimText] = useState<string | null>(null)
 
   // Text-to-Speech state
   const [ttsEnabled, setTtsEnabled] = useState(false)
@@ -596,6 +597,8 @@ function TranslationApp() {
       console.log(`🔌 TranslationApp disconnected: ${reason}`)
       setIsConnecting(false)
       setIsConnected(false)
+      setIsSpeakerTyping(false)
+      setInterimText(null)
 
       // Clear heartbeat interval
       if ((socketRef.current as any)?.heartbeatInterval) {
@@ -609,11 +612,24 @@ function TranslationApp() {
       setIsConnected(false)
     })
 
-    socketRef.current.on('speakerTyping', (data: { isTyping: boolean }) => {
+    socketRef.current.on('speakerTyping', (data: { 
+      isTyping: boolean
+      interimText?: string
+      translatedInterimText?: string
+      sourceLanguage?: string 
+    }) => {
       setIsSpeakerTyping(data.isTyping)
+      if (data.isTyping) {
+        setInterimText(data.translatedInterimText || null)
+      } else if (!data.isTyping) {
+        setInterimText(null)
+      }
     })
 
     socketRef.current.on('translationComplete', (data) => {
+      setInterimText(null)
+      setIsSpeakerTyping(false)
+
       // Immediately acknowledge receipt if messageId is present (guaranteed delivery system)
       if (data.messageId && socketRef.current?.connected) {
         socketRef.current.emit('translationAck', { messageId: data.messageId })
@@ -717,6 +733,8 @@ function TranslationApp() {
       console.log(`🔄 TranslationApp reconnected after ${attemptNumber} attempts`)
       setIsConnecting(false)
       setIsConnected(true)
+      setIsSpeakerTyping(false)
+      setInterimText(null)
 
       // Only re-establish target language if user has already joined (not on landing page)
       // Use refs to avoid stale closure issues
@@ -1176,7 +1194,13 @@ function TranslationApp() {
                 isRTL={isRTLLanguage(targetLanguage)}
                 sx={{ opacity: 0.7, animation: 'none' }}
               >
-                <TypingIndicator visible={true} />
+                {interimText ? (
+                  <Typography variant="bodyText" sx={{ fontStyle: 'italic' }}>
+                    {interimText}
+                  </Typography>
+                ) : (
+                  <TypingIndicator visible={true} />
+                )}
               </MessageBubble>
             </TypingIndicatorSlot>
             {translationBubbles.length === 0 ? (

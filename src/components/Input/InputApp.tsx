@@ -17,7 +17,7 @@ import SaveIcon from '@mui/icons-material/Save';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import StopIcon from '@mui/icons-material/Stop';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { io, Socket } from 'socket.io-client'
 import styled, { keyframes } from 'styled-components'
 import { CONFIG } from '../../config/urls'
@@ -290,7 +290,6 @@ function InputApp() {
   const [isSocketConnected, setIsSocketConnected] = useState(false)
   
   const navigate = useNavigate()
-  const location = useLocation()
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false)
   
   // Recording preferences state (per-session, initialized from localStorage)

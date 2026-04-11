@@ -597,6 +597,8 @@ function TranslationApp() {
       console.log(`🔌 TranslationApp disconnected: ${reason}`)
       setIsConnecting(false)
       setIsConnected(false)
+      setIsSpeakerTyping(false)
+      setInterimText(null)
 
       // Clear heartbeat interval
       if ((socketRef.current as any)?.heartbeatInterval) {

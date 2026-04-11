@@ -619,8 +619,8 @@ function TranslationApp() {
       sourceLanguage?: string 
     }) => {
       setIsSpeakerTyping(data.isTyping)
-      if (data.isTyping && data.translatedInterimText) {
-        setInterimText(data.translatedInterimText)
+      if (data.isTyping) {
+        setInterimText(data.translatedInterimText || null)
       } else if (!data.isTyping) {
         setInterimText(null)
       }
@@ -733,6 +733,8 @@ function TranslationApp() {
       console.log(`🔄 TranslationApp reconnected after ${attemptNumber} attempts`)
       setIsConnecting(false)
       setIsConnected(true)
+      setIsSpeakerTyping(false)
+      setInterimText(null)
 
       // Only re-establish target language if user has already joined (not on landing page)
       // Use refs to avoid stale closure issues

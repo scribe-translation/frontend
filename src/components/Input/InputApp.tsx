@@ -29,6 +29,11 @@ import { setCookie, getCookie } from '../../utils/cookieUtils'
 import { createHybridFlagElement } from '../../utils/flagEmojiUtils.tsx'
 import { useWakeLock } from '../../utils/useWakeLock'
 import { isRTLLanguage } from '../../utils/rtlUtils'
+import {
+  getMicrophoneErrorMessage,
+  isStreamLive,
+  queryMicrophonePermission,
+} from '../../utils/microphonePermission'
 
 interface MessageBubble {
   id: string
@@ -318,6 +323,8 @@ function InputApp() {
     speechStartTimeout: 5.0
   })
   const [isServiceReady, setIsServiceReady] = useState(false)
+  const [micPermissionDenied, setMicPermissionDenied] = useState(false)
+  const [reconnectNotice, setReconnectNotice] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [connectionQuality, setConnectionQuality] = useState<'good' | 'unstable' | 'disconnected'>('good')
   const socketRef = React.useRef<Socket | null>(null)
@@ -508,20 +515,24 @@ function InputApp() {
       missedPongCountRef.current = 0
       awaitingPongRef.current = false
 
-      // Re-initialize Google Speech Service with the reconnected socket
       try {
         await googleSpeechService.initialize(socketRef.current)
+        setIsServiceReady(googleSpeechService.isSocketReady())
 
-        // Auto-resume streaming if we were streaming before disconnect
         if (wasStreamingBeforeDisconnectRef.current) {
-          console.log('🎤 Auto-resuming streaming after reconnection...')
-          wasStreamingBeforeDisconnectRef.current = false // Reset flag
-          // Use shouldBeListening to trigger re-start through existing effect
-          setShouldBeListening(true)
+          wasStreamingBeforeDisconnectRef.current = false
+          setShouldBeListening(false)
+          googleSpeechService.stopRecognition()
+          setIsTranslating(false)
+          setAudioLevel(0)
+          setReconnectNotice(
+            'Connection restored — tap Start Recording to continue.'
+          )
         }
       } catch (error) {
         console.error('❌ Failed to re-initialize Google Speech Service:', error)
-        wasStreamingBeforeDisconnectRef.current = false // Reset flag on error
+        wasStreamingBeforeDisconnectRef.current = false
+        setIsServiceReady(false)
       }
     })
 
@@ -717,7 +728,19 @@ function InputApp() {
 
         console.log(`👁️ App foregrounded after ${Math.round(hiddenDuration / 1000)}s`)
 
-        // If socket exists, verify connection immediately
+        if (
+          isTranslatingRef.current &&
+          !isStreamLive(googleSpeechService.getStream())
+        ) {
+          setShouldBeListening(false)
+          googleSpeechService.stopRecognition()
+          setIsTranslating(false)
+          setAudioLevel(0)
+          setErrorMessage(
+            'Microphone was interrupted. Tap Start Recording to enable it again.'
+          )
+        }
+
         if (socketRef.current) {
           // Send immediate ping to verify connection
           awaitingPongRef.current = true
@@ -749,17 +772,18 @@ function InputApp() {
     }
   }, [])
 
-  // Initialize Google Cloud Speech-to-Text service when socket is connected
+  useEffect(() => {
+    queryMicrophonePermission().then((state) => {
+      setMicPermissionDenied(state === 'denied')
+    })
+  }, [])
+
+  // Wire speech service to socket when connected (no microphone access here)
   useEffect(() => {
     if (isSocketConnected && socketRef.current) {
       googleSpeechService.initialize(socketRef.current)
         .then(() => {
-          const ready = googleSpeechService.isReady();
-          setIsServiceReady(ready);
-          // Apply saved microphone gain after initialization
-          if (ready) {
-            googleSpeechService.setMicrophoneGain(microphoneGain);
-          }
+          setIsServiceReady(googleSpeechService.isSocketReady())
         })
         .catch(error => {
           console.error('❌ Failed to initialize Google Speech Service:', error)
@@ -768,14 +792,13 @@ function InputApp() {
     } else {
       setIsServiceReady(false)
     }
-  }, [isSocketConnected, microphoneGain])
+  }, [isSocketConnected])
 
-  // Apply microphone gain whenever service becomes ready or gain changes
   useEffect(() => {
-    if (isServiceReady && googleSpeechService.isReady()) {
+    if (googleSpeechService.isMicrophoneReady()) {
       googleSpeechService.setMicrophoneGain(microphoneGain)
     }
-  }, [isServiceReady, microphoneGain])
+  }, [microphoneGain])
 
   // Cleanup Google Speech Service on unmount
   useEffect(() => {
@@ -865,38 +888,46 @@ function InputApp() {
 
   // Google Cloud Speech-to-Text handlers
   const startGoogleSpeechRecognition = useCallback(async () => {
-
     try {
-      // Check if Google Speech Service is ready
-      if (!googleSpeechService.isReady()) {
-        console.error('❌ Google Speech Service not ready, attempting to initialize...');
-
-        // Try to initialize if socket is connected
-        if (isSocketConnected && socketRef.current) {
-          try {
-            await googleSpeechService.initialize(socketRef.current)
-          } catch (initError) {
-            console.error('❌ Failed to initialize Google Speech Service:', initError)
-            setErrorMessage('Initializing speech recognition...')
-            setTimeout(() => setErrorMessage(null), 5000)
-            return
-          }
-        } else {
-          setErrorMessage('Connecting to server...')
-          setTimeout(() => setErrorMessage(null), 5000)
-          return
-        }
+      if (!isSocketConnected || !socketRef.current) {
+        setErrorMessage('Connecting to server...')
+        return
       }
 
+      if (!googleSpeechService.isSocketReady()) {
+        await googleSpeechService.initialize(socketRef.current)
+        setIsServiceReady(googleSpeechService.isSocketReady())
+      }
+
+      setReconnectNotice(null)
+      await googleSpeechService.ensureMicrophone({
+        deviceId: selectedDeviceId ?? undefined,
+      })
+      googleSpeechService.setMicrophoneGain(microphoneGain)
+      setMicPermissionDenied(false)
       setErrorMessage(null)
       await startGoogleSpeechRecognitionInternal()
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('❌ Failed to start Google Speech recognition:', error)
-      setErrorMessage('Failed to start speech recognition')
-      setTimeout(() => setErrorMessage(null), 5000)
+      const message =
+        error instanceof Error
+          ? error.message
+          : getMicrophoneErrorMessage(error)
+      setErrorMessage(message)
+      setShouldBeListening(false)
       setIsTranslating(false)
+
+      const permission = await queryMicrophonePermission()
+      if (permission === 'denied') {
+        setMicPermissionDenied(true)
+      }
     }
-  }, [sourceLanguage, speechConfig, isSocketConnected, startGoogleSpeechRecognitionInternal, shouldBeListening])
+  }, [
+    isSocketConnected,
+    selectedDeviceId,
+    microphoneGain,
+    startGoogleSpeechRecognitionInternal,
+  ])
 
   const stopGoogleSpeechRecognition = useCallback(() => {
     // If there's current interim transcription, submit it as final
@@ -1017,7 +1048,10 @@ function InputApp() {
               disabled={!isServiceReady}
               onClick={() => {
                 if (isTranslating) setShouldBeListening(false)
-                else setConfirmDialogOpen(true)
+                else {
+                  setReconnectNotice(null)
+                  setConfirmDialogOpen(true)
+                }
               }}
               sx={{ 
                 minWidth: '64px', width: '64px', height: '48px', 
@@ -1029,6 +1063,22 @@ function InputApp() {
               {isTranslating ? <StopIcon /> : <PlayArrowIcon />}
             </Button>
           </Box>
+
+          {micPermissionDenied && (
+            <Alert severity="warning" sx={{ borderRadius: '1rem' }}>
+              Microphone access is blocked for this site. In Safari: Settings → Websites →
+              Microphone, allow this page, then tap Start Recording again.
+            </Alert>
+          )}
+          {reconnectNotice && (
+            <Alert
+              severity="info"
+              sx={{ borderRadius: '1rem' }}
+              onClose={() => setReconnectNotice(null)}
+            >
+              {reconnectNotice}
+            </Alert>
+          )}
 
           <Collapse in={settingsExpanded}>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: '8px', mt: '4px' }}>
@@ -1257,6 +1307,21 @@ function InputApp() {
               </Tooltip>
             </Box>
           </Box>
+          {micPermissionDenied && (
+            <Alert severity="warning" sx={{ borderRadius: '1rem', marginTop: '1rem' }}>
+              Microphone access is blocked for this site. In Safari: Settings → Websites →
+              Microphone, allow this page, then tap Start Recording again.
+            </Alert>
+          )}
+          {reconnectNotice && (
+            <Alert
+              severity="info"
+              sx={{ borderRadius: '1rem', marginTop: '1rem' }}
+              onClose={() => setReconnectNotice(null)}
+            >
+              {reconnectNotice}
+            </Alert>
+          )}
           <Button
             variant="contained"
             color="primary"
@@ -1269,11 +1334,12 @@ function InputApp() {
               if (isTranslating) {
                 setShouldBeListening(false)
               } else {
+                setReconnectNotice(null)
                 setConfirmDialogOpen(true)
               }
             }}
           >
-            {!isServiceReady ? 'Initializing...' : isTranslating ? 'Translating...' : 'Translate'}
+            {!isServiceReady ? 'Connecting...' : isTranslating ? 'Translating...' : 'Translate'}
           </Button>
           <QRCodeSection>
             <Typography variant="subsectionHeader" sx={{ textAlign: 'center' }}>
@@ -1492,6 +1558,7 @@ function InputApp() {
           <Button 
             onClick={() => {
               setConfirmDialogOpen(false)
+              setReconnectNotice(null)
               setShouldBeListening(true)
             }} 
             variant="contained" 

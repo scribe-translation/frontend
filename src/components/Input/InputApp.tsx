@@ -35,6 +35,7 @@ import {
   needsMicrophonePrompt,
   queryMicrophonePermission,
 } from '../../utils/microphonePermission'
+import { isSessionCodeAuthError } from '../../utils/sessionCodeUtils'
 
 interface MessageBubble {
   id: string
@@ -501,10 +502,16 @@ function InputApp() {
       }
     })
 
-    socketRef.current.on('connect_error', (error) => {
+    socketRef.current.on('connect_error', (error: Error) => {
       console.error('❌ Socket connection error:', error)
       setIsSocketConnecting(false)
       setIsSocketConnected(false)
+      const message = error?.message || ''
+      if (isSessionCodeAuthError(message)) {
+        setErrorMessage(
+          'Your session code could not be verified. Open Profile → Session Code to confirm or regenerate it, then refresh this page.'
+        )
+      }
     })
 
     socketRef.current.on('reconnect', async (attemptNumber) => {

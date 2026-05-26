@@ -214,7 +214,7 @@ const ProfileContent: React.FC<ProfileContentProps> = ({ user }) => {
         
         <Box>
           <Typography variant="sectionHeader" sx={{ marginBottom: '0.5rem' }}>
-            User Code Management
+            Session Code Management
           </Typography>
           
           {!isEditingSessionCode ? (
@@ -272,7 +272,7 @@ const ProfileContent: React.FC<ProfileContentProps> = ({ user }) => {
           ) : (
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               <TextField
-                label="Custom User Code"
+                label="Custom Session Code"
                 value={customSessionCode}
                 onChange={(e) => setCustomSessionCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8))}
                 placeholder="ABC123"

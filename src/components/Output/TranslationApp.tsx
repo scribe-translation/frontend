@@ -16,6 +16,12 @@ import { createHybridFlagElement } from '../../utils/flagEmojiUtils.tsx'
 import { useWakeLock } from '../../utils/useWakeLock'
 import TypingIndicator from '../UI/TypingIndicator'
 import { isRTLLanguage } from '../../utils/rtlUtils'
+import {
+  getSessionCodeErrorMessage,
+  isSessionCodeAuthError,
+  isValidSessionCodeFormat,
+  normalizeSessionCode,
+} from '../../utils/sessionCodeUtils'
 
 const LandingPageContainer = styled.div`
   display: flex;
@@ -457,6 +463,7 @@ function TranslationApp() {
   const [isValidatingSessionCode, setIsValidatingSessionCode] = useState(false)
   const [sessionCodeValidationError, setSessionCodeValidationError] = useState('')
   const [attemptedSessionCode, setAttemptedSessionCode] = useState('')
+  const [sessionCodeValidated, setSessionCodeValidated] = useState(false)
 
   const socketRef = useRef<Socket | null>(null)
   const theme = useTheme()
@@ -465,35 +472,87 @@ function TranslationApp() {
 
   // Prevent screen from dimming while using the app
   // Only enable when user has joined a session (not on landing pages)
-  useWakeLock(!showLanguageSelection && !!sessionCode && !sessionCodeValidationError)
+  useWakeLock(
+    !showLanguageSelection &&
+      sessionCodeValidated &&
+      !!sessionCode &&
+      !sessionCodeValidationError
+  )
+
+  const resetSessionJoinState = useCallback(() => {
+    setSessionCodeValidated(false)
+    clearSessionCode()
+    setSessionCodeInput('')
+    setSessionCodeValidationError('')
+    setAttemptedSessionCode('')
+    setShowLanguageSelection(true)
+    if (socketRef.current) {
+      socketRef.current.disconnect()
+      socketRef.current = null
+    }
+    setIsConnecting(false)
+    setIsConnected(false)
+  }, [clearSessionCode])
+
+  const handleSessionCodeAuthFailure = useCallback(
+    (message: string, attemptedCode?: string) => {
+      const code = attemptedCode ? normalizeSessionCode(attemptedCode) : ''
+      setSessionCodeValidated(false)
+      clearSessionCode()
+      setShowLanguageSelection(true)
+      if (code) {
+        setAttemptedSessionCode(code)
+        setSessionCodeInput(code)
+      }
+      setSessionCodeValidationError(getSessionCodeErrorMessage(message))
+      if (socketRef.current) {
+        socketRef.current.disconnect()
+        socketRef.current = null
+      }
+      setIsConnecting(false)
+      setIsConnected(false)
+    },
+    [clearSessionCode]
+  )
 
   // Function to validate session code
-  const validateSessionCode = async (sessionCodeToValidate: string): Promise<boolean> => {
-    if (!sessionCodeToValidate || !/^[A-Z0-9]{3,8}$/.test(sessionCodeToValidate)) {
+  const validateSessionCode = async (rawCode: string): Promise<boolean> => {
+    const sessionCodeToValidate = normalizeSessionCode(rawCode)
+
+    if (!sessionCodeToValidate || !isValidSessionCodeFormat(sessionCodeToValidate)) {
       setSessionCodeValidationError('Session code must be 3-8 characters (letters and numbers)')
-      clearSessionCode() // Clear any existing session code
+      setSessionCodeValidated(false)
+      clearSessionCode()
       return false
     }
 
     setIsValidatingSessionCode(true)
     setSessionCodeValidationError('')
+    setAttemptedSessionCode(sessionCodeToValidate)
 
     try {
-      const response = await fetch(`${CONFIG.BACKEND_URL}/auth/user-by-session-code?code=${sessionCodeToValidate}`)
+      const response = await fetch(
+        `${CONFIG.BACKEND_URL}/auth/user-by-session-code?code=${encodeURIComponent(sessionCodeToValidate)}`
+      )
       const data = await response.json()
 
-      if (data.user) {
+      if (response.ok && data.user) {
         setSessionCode(sessionCodeToValidate)
+        setSessionCodeInput(sessionCodeToValidate)
+        setSessionCodeValidated(true)
         return true
-      } else {
-        setSessionCodeValidationError('Session code not found or invalid')
-        clearSessionCode() // Clear any existing session code
-        return false
       }
+
+      handleSessionCodeAuthFailure(
+        data.error || 'Session code not found',
+        sessionCodeToValidate
+      )
+      return false
     } catch (error) {
       console.error('Session code validation error:', error)
-      setSessionCodeValidationError('Failed to validate session code. Please try again.')
-      clearSessionCode() // Clear any existing session code
+      setSessionCodeValidationError('Could not verify the session code. Check your connection and try again.')
+      setSessionCodeValidated(false)
+      clearSessionCode()
       return false
     } finally {
       setIsValidatingSessionCode(false)
@@ -503,24 +562,21 @@ function TranslationApp() {
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search)
     const codeFromUrl = urlParams.get('code')
-    console.log('🔗 TranslationApp - Session code from URL:', codeFromUrl)
-    console.log('🔗 TranslationApp - Current sessionCode:', sessionCode)
 
     if (codeFromUrl) {
-      setAttemptedSessionCode(codeFromUrl.toUpperCase())
-      setSessionCodeInput(codeFromUrl.toUpperCase())
-      validateSessionCode(codeFromUrl)
+      const normalized = normalizeSessionCode(codeFromUrl)
+      setSessionCodeInput(normalized)
+      void validateSessionCode(normalized)
     } else {
-      console.log('🔗 TranslationApp - No session code in URL, clearing session code and showing blank page')
-      clearSessionCode() // Clear any existing session code
+      resetSessionJoinState()
     }
-  }, []) // Remove dependencies to avoid infinite loop
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
+  }, [])
 
   useEffect(() => {
     console.log('🔗 TranslationApp - Connecting with sessionCode:', sessionCode, 'targetLanguage:', targetLanguage)
 
-    // Only connect if we have both a session code and target language
-    if (!targetLanguage || !sessionCode) {
+    if (!sessionCodeValidated || !targetLanguage || !sessionCode) {
       console.log('🔗 TranslationApp - Not connecting: missing sessionCode or targetLanguage')
       setIsConnecting(false)
       setIsConnected(false)
@@ -606,10 +662,14 @@ function TranslationApp() {
       }
     })
 
-    socketRef.current.on('connect_error', (error) => {
+    socketRef.current.on('connect_error', (error: Error) => {
       console.error('🔗 TranslationApp - Connection error:', error)
       setIsConnecting(false)
       setIsConnected(false)
+      const message = error?.message || ''
+      if (isSessionCodeAuthError(message)) {
+        handleSessionCodeAuthFailure(message, sessionCode ?? undefined)
+      }
     })
 
     socketRef.current.on('speakerTyping', (data: { 
@@ -723,11 +783,6 @@ function TranslationApp() {
       }
     })
 
-    socketRef.current.on('connect_error', (error) => {
-      console.error('❌ Connection error:', error)
-      setIsConnecting(false)
-      setIsConnected(false)
-    })
 
     socketRef.current.on('reconnect', (attemptNumber) => {
       console.log(`🔄 TranslationApp reconnected after ${attemptNumber} attempts`)
@@ -791,7 +846,7 @@ function TranslationApp() {
       setIsConnecting(false)
       setIsConnected(false)
     }
-  }, [targetLanguage, sessionCode]) // Removed showLanguageSelection - we don't need to reconnect when it changes
+  }, [targetLanguage, sessionCode, sessionCodeValidated, handleSessionCodeAuthFailure])
 
   // Visibility change handler - verify connection when app returns from background
   useEffect(() => {
@@ -861,7 +916,7 @@ function TranslationApp() {
     }
   }
 
-  if (!sessionCode || sessionCodeValidationError) {
+  if (!sessionCodeValidated || sessionCodeValidationError) {
     return (
       <LandingPageContainer>
         <LandingCard elevation={3} sx={{ gap: '1rem', padding: '1rem' }}>
@@ -878,11 +933,16 @@ function TranslationApp() {
           </Typography>
 
           <Typography variant="bodyText" sx={{ textAlign: 'center', color: 'text.secondary' }}>
-            {attemptedSessionCode ?
-              `The session code "${attemptedSessionCode}" is not valid. Please enter a different session code.` :
-              'Enter the session code provided by the speaker to join their live translation session.'
-            }
+            {attemptedSessionCode
+              ? `We couldn't find an active session for "${attemptedSessionCode}".`
+              : 'Enter the session code from your speaker to join their live translation session.'}
           </Typography>
+
+          {sessionCodeValidationError && (
+            <Alert severity="warning" sx={{ width: '100%', maxWidth: '300px', borderRadius: '1rem' }}>
+              {sessionCodeValidationError}
+            </Alert>
+          )}
 
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: '1rem', width: '100%', maxWidth: '300px' }}>
             <TextField
@@ -980,12 +1040,7 @@ function TranslationApp() {
               <Button
                 variant="outlined"
                 color="secondary"
-                onClick={() => {
-                  clearSessionCode()
-                  setSessionCodeInput('')
-                  setSessionCodeValidationError('')
-                  setAttemptedSessionCode('')
-                }}
+                onClick={resetSessionJoinState}
                 sx={{
                   borderRadius: '1rem',
                   padding: '0.5rem',

@@ -2,7 +2,9 @@ import {
   getMicrophoneErrorMessage,
   isStreamLive,
   queryMicrophonePermission,
+  watchStreamEnded,
   type MicrophonePermissionState,
+  type StreamEndedCleanup,
 } from '../utils/microphonePermission';
 
 interface SpeechRecognitionConfig {
@@ -33,6 +35,8 @@ interface SpeechRecognitionCallbacks {
 
 export interface EnsureMicrophoneOptions {
   deviceId?: string;
+  force?: boolean;
+  onMicrophoneLost?: () => void;
 }
 
 class GoogleSpeechService {
@@ -69,6 +73,8 @@ class GoogleSpeechService {
   /** Suppress duplicate Google isFinal after client-side silence finalization for the same bubble */
   private lastClientFinalizedBubbleId: string | null = null;
   private activeDeviceId: string | undefined;
+  private streamEndedCleanup: StreamEndedCleanup | null = null;
+  private onMicrophoneLost: (() => void) | null = null;
 
   constructor() {
     this.config = {
@@ -263,10 +269,14 @@ class GoogleSpeechService {
    */
   async ensureMicrophone(options: EnsureMicrophoneOptions = {}): Promise<void> {
     const deviceId = options.deviceId;
+    const force = options.force === true;
     const deviceChanged =
       deviceId !== undefined && deviceId !== this.activeDeviceId;
 
+    this.onMicrophoneLost = options.onMicrophoneLost ?? null;
+
     if (
+      !force &&
       isStreamLive(this.stream) &&
       this.audioContext &&
       !deviceChanged
@@ -323,6 +333,8 @@ class GoogleSpeechService {
       this.microphone.connect(this.gainNode);
       this.gainNode.connect(this.analyser);
 
+      this.attachStreamLifecycleWatchers();
+
       await this.resumeAudioContext();
     } catch (error) {
       this.releaseMicrophone();
@@ -331,7 +343,35 @@ class GoogleSpeechService {
     }
   }
 
+  private attachStreamLifecycleWatchers(): void {
+    if (this.streamEndedCleanup) {
+      this.streamEndedCleanup();
+      this.streamEndedCleanup = null;
+    }
+
+    if (!this.stream) {
+      return;
+    }
+
+    this.streamEndedCleanup = watchStreamEnded(this.stream, () => {
+      this.handleMicrophoneLost();
+    });
+  }
+
+  private handleMicrophoneLost(): void {
+    if (this.isRecording) {
+      this.stopRecognition();
+    }
+    this.releaseMicrophone();
+    this.onMicrophoneLost?.();
+  }
+
   releaseMicrophone(): void {
+    if (this.streamEndedCleanup) {
+      this.streamEndedCleanup();
+      this.streamEndedCleanup = null;
+    }
+
     if (this.microphone) {
       try {
         this.microphone.disconnect();

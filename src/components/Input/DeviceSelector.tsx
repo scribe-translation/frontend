@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import {
   FormControl,
   InputLabel,
@@ -22,6 +22,7 @@ interface DeviceSelectorProps {
   selectedDeviceId: string | null
   onDeviceChange: (deviceId: string) => void
   disabled?: boolean
+  micAccessResetKey?: number
 }
 
 const PLACEHOLDER_DEVICE: AudioDevice = {
@@ -33,28 +34,42 @@ const PLACEHOLDER_DEVICE: AudioDevice = {
 const DeviceSelector: React.FC<DeviceSelectorProps> = ({
   selectedDeviceId,
   onDeviceChange,
-  disabled = false
+  disabled = false,
+  micAccessResetKey = 0,
 }) => {
   const [devices, setDevices] = useState<AudioDevice[]>([])
   const [isLoading, setIsLoading] = useState(false)
-  const [hasEnumerated, setHasEnumerated] = useState(false)
+  const [hasDeviceAccess, setHasDeviceAccess] = useState(false)
+
+  useEffect(() => {
+    setHasDeviceAccess(false)
+    setDevices([])
+  }, [micAccessResetKey])
 
   const getAudioDevices = async () => {
     setIsLoading(true)
+    let probeStream: MediaStream | null = null
     try {
-      await navigator.mediaDevices.getUserMedia({ audio: true })
+      probeStream = await navigator.mediaDevices.getUserMedia({ audio: true })
 
       const deviceList = await navigator.mediaDevices.enumerateDevices()
       const audioInputs = deviceList
-        .filter(device => device.kind === 'audioinput')
-        .map(device => ({
+        .filter((device) => device.kind === 'audioinput')
+        .map((device) => ({
           deviceId: device.deviceId,
           label: device.label || `Microphone ${device.deviceId.slice(0, 8)}`,
-          kind: device.kind
+          kind: device.kind,
         }))
+        .filter((device) => device.deviceId.length > 0)
+
+      if (audioInputs.length === 0) {
+        setDevices([])
+        setHasDeviceAccess(false)
+        return
+      }
 
       setDevices(audioInputs)
-      setHasEnumerated(true)
+      setHasDeviceAccess(true)
 
       if (audioInputs.length > 0 && !selectedDeviceId) {
         onDeviceChange(audioInputs[0].deviceId)
@@ -62,8 +77,9 @@ const DeviceSelector: React.FC<DeviceSelectorProps> = ({
     } catch (error) {
       console.error('Error accessing audio devices:', error)
       setDevices([])
-      setHasEnumerated(false)
+      setHasDeviceAccess(false)
     } finally {
+      probeStream?.getTracks().forEach((t) => t.stop())
       setIsLoading(false)
     }
   }
@@ -79,11 +95,16 @@ const DeviceSelector: React.FC<DeviceSelectorProps> = ({
     }
   }
 
-  const displayDevices = hasEnumerated && devices.length > 0 ? devices : [PLACEHOLDER_DEVICE]
+  const displayDevices =
+    hasDeviceAccess && devices.length > 0 ? devices : [PLACEHOLDER_DEVICE]
 
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: '0.5rem', width: '100%' }}>
-      <FormControl fullWidth size="small" disabled={disabled || isLoading || !hasEnumerated}>
+      <FormControl
+        fullWidth
+        size="small"
+        disabled={disabled || isLoading || !hasDeviceAccess}
+      >
         <InputLabel id="device-selector-label">
           <Box sx={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <MicIcon sx={{ fontSize: 16 }} />
@@ -101,8 +122,8 @@ const DeviceSelector: React.FC<DeviceSelectorProps> = ({
             '& .MuiSelect-select': {
               display: 'flex',
               alignItems: 'center',
-              gap: '0.5rem'
-            }
+              gap: '0.5rem',
+            },
           }}
         >
           {displayDevices.map((device) => (
@@ -130,8 +151,8 @@ const DeviceSelector: React.FC<DeviceSelectorProps> = ({
           sx={{
             color: 'primary.main',
             '&:hover': {
-              backgroundColor: 'rgba(210, 180, 140, 0.1)'
-            }
+              backgroundColor: 'rgba(210, 180, 140, 0.1)',
+            },
           }}
         >
           <RefreshIcon sx={{ fontSize: 18 }} />

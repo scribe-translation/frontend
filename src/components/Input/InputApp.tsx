@@ -32,6 +32,7 @@ import { isRTLLanguage } from '../../utils/rtlUtils'
 import {
   getMicrophoneErrorMessage,
   isStreamLive,
+  needsMicrophonePrompt,
   queryMicrophonePermission,
 } from '../../utils/microphonePermission'
 
@@ -324,6 +325,8 @@ function InputApp() {
   })
   const [isServiceReady, setIsServiceReady] = useState(false)
   const [micPermissionDenied, setMicPermissionDenied] = useState(false)
+  const [micNeedsPrompt, setMicNeedsPrompt] = useState(false)
+  const [micAccessResetKey, setMicAccessResetKey] = useState(0)
   const [reconnectNotice, setReconnectNotice] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [connectionQuality, setConnectionQuality] = useState<'good' | 'unstable' | 'disconnected'>('good')
@@ -734,6 +737,8 @@ function InputApp() {
         ) {
           setShouldBeListening(false)
           googleSpeechService.stopRecognition()
+          googleSpeechService.releaseMicrophone()
+          setMicAccessResetKey((k) => k + 1)
           setIsTranslating(false)
           setAudioLevel(0)
           setErrorMessage(
@@ -775,7 +780,21 @@ function InputApp() {
   useEffect(() => {
     queryMicrophonePermission().then((state) => {
       setMicPermissionDenied(state === 'denied')
+      setMicNeedsPrompt(
+        needsMicrophonePrompt(state) && !googleSpeechService.isMicrophoneReady()
+      )
     })
+  }, [])
+
+  const handleMicrophoneLost = useCallback(() => {
+    setShouldBeListening(false)
+    setIsTranslating(false)
+    setAudioLevel(0)
+    setMicAccessResetKey((k) => k + 1)
+    setMicNeedsPrompt(true)
+    setErrorMessage(
+      'Microphone was interrupted. Tap Start Recording to enable it again.'
+    )
   }, [])
 
   // Wire speech service to socket when connected (no microphone access here)
@@ -894,19 +913,25 @@ function InputApp() {
         return
       }
 
+      setReconnectNotice(null)
+
+      // Acquire mic first while still inside the user-gesture handler (required on iOS).
+      await googleSpeechService.ensureMicrophone({
+        deviceId: selectedDeviceId ?? undefined,
+        onMicrophoneLost: handleMicrophoneLost,
+      })
+      googleSpeechService.setMicrophoneGain(microphoneGain)
+      setMicPermissionDenied(false)
+      setMicNeedsPrompt(false)
+      setErrorMessage(null)
+
       if (!googleSpeechService.isSocketReady()) {
         await googleSpeechService.initialize(socketRef.current)
         setIsServiceReady(googleSpeechService.isSocketReady())
       }
 
-      setReconnectNotice(null)
-      await googleSpeechService.ensureMicrophone({
-        deviceId: selectedDeviceId ?? undefined,
-      })
-      googleSpeechService.setMicrophoneGain(microphoneGain)
-      setMicPermissionDenied(false)
-      setErrorMessage(null)
       await startGoogleSpeechRecognitionInternal()
+      setShouldBeListening(true)
     } catch (error: unknown) {
       console.error('❌ Failed to start Google Speech recognition:', error)
       const message =
@@ -916,18 +941,29 @@ function InputApp() {
       setErrorMessage(message)
       setShouldBeListening(false)
       setIsTranslating(false)
+      googleSpeechService.releaseMicrophone()
+      setMicAccessResetKey((k) => k + 1)
 
       const permission = await queryMicrophonePermission()
       if (permission === 'denied') {
         setMicPermissionDenied(true)
+      } else if (needsMicrophonePrompt(permission)) {
+        setMicNeedsPrompt(true)
       }
     }
   }, [
     isSocketConnected,
     selectedDeviceId,
     microphoneGain,
+    handleMicrophoneLost,
     startGoogleSpeechRecognitionInternal,
   ])
+
+  const handleStartRecording = useCallback(async () => {
+    setConfirmDialogOpen(false)
+    setReconnectNotice(null)
+    await startGoogleSpeechRecognition()
+  }, [startGoogleSpeechRecognition])
 
   const stopGoogleSpeechRecognition = useCallback(() => {
     // If there's current interim transcription, submit it as final
@@ -973,16 +1009,12 @@ function InputApp() {
     setIsTranslating(false)
   }, [currentTranscription, socketRef, isSocketConnected, sourceLanguage])
 
-  // Handle Google Cloud Speech-to-Text
+  // Stop recording when user toggles off (start runs from handleStartRecording on gesture)
   useEffect(() => {
-    if (isSocketConnected) {
-      if (shouldBeListening) {
-        startGoogleSpeechRecognition()
-      } else {
-        stopGoogleSpeechRecognition()
-      }
+    if (!shouldBeListening) {
+      stopGoogleSpeechRecognition()
     }
-  }, [shouldBeListening, isSocketConnected, startGoogleSpeechRecognition, stopGoogleSpeechRecognition])
+  }, [shouldBeListening, stopGoogleSpeechRecognition])
 
 
   const downloadQRCode = () => {
@@ -1070,6 +1102,11 @@ function InputApp() {
               Microphone, allow this page, then tap Start Recording again.
             </Alert>
           )}
+          {micNeedsPrompt && !micPermissionDenied && (
+            <Alert severity="info" sx={{ borderRadius: '1rem' }}>
+              Tap Start Recording to allow microphone access for this session.
+            </Alert>
+          )}
           {reconnectNotice && (
             <Alert
               severity="info"
@@ -1091,6 +1128,7 @@ function InputApp() {
                   selectedDeviceId={selectedDeviceId}
                   onDeviceChange={setSelectedDeviceId}
                   disabled={isTranslating}
+                  micAccessResetKey={micAccessResetKey}
                 />
                 <Box sx={{ marginTop: '1rem' }}>
                   <Tooltip title="Lower values reduce background noise, breathing, and static. Adjust in real-time during recording.">
@@ -1259,6 +1297,7 @@ function InputApp() {
               selectedDeviceId={selectedDeviceId}
               onDeviceChange={setSelectedDeviceId}
               disabled={isTranslating}
+              micAccessResetKey={micAccessResetKey}
             />
             <Box>
               <Tooltip title="Lower values reduce background noise, breathing, and static. Adjust in real-time during recording.">
@@ -1311,6 +1350,11 @@ function InputApp() {
             <Alert severity="warning" sx={{ borderRadius: '1rem', marginTop: '1rem' }}>
               Microphone access is blocked for this site. In Safari: Settings → Websites →
               Microphone, allow this page, then tap Start Recording again.
+            </Alert>
+          )}
+          {micNeedsPrompt && !micPermissionDenied && (
+            <Alert severity="info" sx={{ borderRadius: '1rem', marginTop: '1rem' }}>
+              Tap Start Recording to allow microphone access for this session.
             </Alert>
           )}
           {reconnectNotice && (
@@ -1557,9 +1601,7 @@ function InputApp() {
           </Button>
           <Button 
             onClick={() => {
-              setConfirmDialogOpen(false)
-              setReconnectNotice(null)
-              setShouldBeListening(true)
+              void handleStartRecording()
             }} 
             variant="contained" 
             sx={{ borderRadius: '1rem', px: 3 }}

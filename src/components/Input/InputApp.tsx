@@ -22,13 +22,20 @@ import { io, Socket } from 'socket.io-client'
 import styled, { keyframes } from 'styled-components'
 import { CONFIG } from '../../config/urls'
 import { useAuth } from '../../contexts/AuthContext'
-import { useUserCode } from '../../contexts/SessionContext'
+import { useSessionCode } from '../../contexts/SessionContext'
 // ProfileModal removed in favor of full page /profile
 import googleSpeechService from '../../services/googleSpeechService'
 import { setCookie, getCookie } from '../../utils/cookieUtils'
 import { createHybridFlagElement } from '../../utils/flagEmojiUtils.tsx'
 import { useWakeLock } from '../../utils/useWakeLock'
 import { isRTLLanguage } from '../../utils/rtlUtils'
+import {
+  getMicrophoneErrorMessage,
+  isStreamLive,
+  needsMicrophonePrompt,
+  queryMicrophonePermission,
+} from '../../utils/microphonePermission'
+import { isSessionCodeAuthError } from '../../utils/sessionCodeUtils'
 
 interface MessageBubble {
   id: string
@@ -310,7 +317,7 @@ function InputApp() {
       socketRef.current.emit('updateRecordingPrefs', recordingPrefs)
     }
   }, [recordingPrefs, isSocketConnected])
-  const [connectionInfo, setConnectionInfo] = useState<{ userCode: string, connectionUrl: string, qrCodeUrl: string, shareText: string } | null>(null)
+  const [connectionInfo, setConnectionInfo] = useState<{ sessionCode: string, connectionUrl: string, qrCodeUrl: string, shareText: string } | null>(null)
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null)
   const [speechConfig, setSpeechConfig] = useState({
     speechEndTimeout: 1, // Balanced timeout for natural speech patterns
@@ -318,6 +325,10 @@ function InputApp() {
     speechStartTimeout: 5.0
   })
   const [isServiceReady, setIsServiceReady] = useState(false)
+  const [micPermissionDenied, setMicPermissionDenied] = useState(false)
+  const [micNeedsPrompt, setMicNeedsPrompt] = useState(false)
+  const [micAccessResetKey, setMicAccessResetKey] = useState(0)
+  const [reconnectNotice, setReconnectNotice] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [connectionQuality, setConnectionQuality] = useState<'good' | 'unstable' | 'disconnected'>('good')
   const socketRef = React.useRef<Socket | null>(null)
@@ -336,7 +347,7 @@ function InputApp() {
   const wasStreamingBeforeDisconnectRef = React.useRef<boolean>(false) // Track streaming state for auto-resume
   const isTranslatingRef = React.useRef<boolean>(false) // Ref to track isTranslating for socket handlers
   const { user, tokens, logout, updateTokens, getConnectionInfo } = useAuth()
-  const { userCode, setUserCode, clearUserCode } = useUserCode()
+  const { sessionCode, setSessionCode, clearSessionCode } = useSessionCode()
   const theme = useTheme()
   const isMobile = useMediaQuery('(max-width: 850px)')
 
@@ -357,16 +368,16 @@ function InputApp() {
   }, [isTranslating])
 
   useEffect(() => {
-    if (tokens && user && user.userCode) {
-      // Always sync the userCode from AuthContext to UserCodeContext
-      if (userCode !== user.userCode) {
-        setUserCode(user.userCode)
+    if (tokens && user && user.sessionCode) {
+      // Always sync the sessionCode from AuthContext to SessionCodeContext
+      if (sessionCode !== user.sessionCode) {
+        setSessionCode(user.sessionCode)
       }
     }
-  }, [tokens, user, userCode, setUserCode])
+  }, [tokens, user, sessionCode, setSessionCode])
 
   useEffect(() => {
-    if (tokens && userCode) {
+    if (tokens && sessionCode) {
       const fetchConnectionInfo = async () => {
         try {
           const info = await getConnectionInfo()
@@ -377,10 +388,10 @@ function InputApp() {
       }
       fetchConnectionInfo()
     }
-  }, [tokens, userCode, getConnectionInfo])
+  }, [tokens, sessionCode, getConnectionInfo])
 
   useEffect(() => {
-    if (!tokens || !userCode) {
+    if (!tokens || !sessionCode) {
       setIsSocketConnecting(false)
       setIsSocketConnected(false)
       return
@@ -405,7 +416,7 @@ function InputApp() {
     socketRef.current = io(CONFIG.BACKEND_URL, {
       auth: {
         token: tokens.accessToken,
-        userCode: userCode
+        sessionCode: sessionCode
       },
       reconnection: true,
       reconnectionAttempts: 10,
@@ -491,10 +502,16 @@ function InputApp() {
       }
     })
 
-    socketRef.current.on('connect_error', (error) => {
+    socketRef.current.on('connect_error', (error: Error) => {
       console.error('❌ Socket connection error:', error)
       setIsSocketConnecting(false)
       setIsSocketConnected(false)
+      const message = error?.message || ''
+      if (isSessionCodeAuthError(message)) {
+        setErrorMessage(
+          'Your session code could not be verified. Open Profile → Session Code to confirm or regenerate it, then refresh this page.'
+        )
+      }
     })
 
     socketRef.current.on('reconnect', async (attemptNumber) => {
@@ -508,20 +525,24 @@ function InputApp() {
       missedPongCountRef.current = 0
       awaitingPongRef.current = false
 
-      // Re-initialize Google Speech Service with the reconnected socket
       try {
         await googleSpeechService.initialize(socketRef.current)
+        setIsServiceReady(googleSpeechService.isSocketReady())
 
-        // Auto-resume streaming if we were streaming before disconnect
         if (wasStreamingBeforeDisconnectRef.current) {
-          console.log('🎤 Auto-resuming streaming after reconnection...')
-          wasStreamingBeforeDisconnectRef.current = false // Reset flag
-          // Use shouldBeListening to trigger re-start through existing effect
-          setShouldBeListening(true)
+          wasStreamingBeforeDisconnectRef.current = false
+          setShouldBeListening(false)
+          googleSpeechService.stopRecognition()
+          setIsTranslating(false)
+          setAudioLevel(0)
+          setReconnectNotice(
+            'Connection restored — tap Start Recording to continue.'
+          )
         }
       } catch (error) {
         console.error('❌ Failed to re-initialize Google Speech Service:', error)
-        wasStreamingBeforeDisconnectRef.current = false // Reset flag on error
+        wasStreamingBeforeDisconnectRef.current = false
+        setIsServiceReady(false)
       }
     })
 
@@ -700,7 +721,7 @@ function InputApp() {
       setIsSocketConnecting(false)
       setIsSocketConnected(false)
     }
-  }, [tokens, userCode])
+  }, [tokens, sessionCode])
 
   // Visibility change handler - verify connection when app returns from background
   useEffect(() => {
@@ -717,7 +738,21 @@ function InputApp() {
 
         console.log(`👁️ App foregrounded after ${Math.round(hiddenDuration / 1000)}s`)
 
-        // If socket exists, verify connection immediately
+        if (
+          isTranslatingRef.current &&
+          !isStreamLive(googleSpeechService.getStream())
+        ) {
+          setShouldBeListening(false)
+          googleSpeechService.stopRecognition()
+          googleSpeechService.releaseMicrophone()
+          setMicAccessResetKey((k) => k + 1)
+          setIsTranslating(false)
+          setAudioLevel(0)
+          setErrorMessage(
+            'Microphone was interrupted. Tap Start Recording to enable it again.'
+          )
+        }
+
         if (socketRef.current) {
           // Send immediate ping to verify connection
           awaitingPongRef.current = true
@@ -749,17 +784,32 @@ function InputApp() {
     }
   }, [])
 
-  // Initialize Google Cloud Speech-to-Text service when socket is connected
+  useEffect(() => {
+    queryMicrophonePermission().then((state) => {
+      setMicPermissionDenied(state === 'denied')
+      setMicNeedsPrompt(
+        needsMicrophonePrompt(state) && !googleSpeechService.isMicrophoneReady()
+      )
+    })
+  }, [])
+
+  const handleMicrophoneLost = useCallback(() => {
+    setShouldBeListening(false)
+    setIsTranslating(false)
+    setAudioLevel(0)
+    setMicAccessResetKey((k) => k + 1)
+    setMicNeedsPrompt(true)
+    setErrorMessage(
+      'Microphone was interrupted. Tap Start Recording to enable it again.'
+    )
+  }, [])
+
+  // Wire speech service to socket when connected (no microphone access here)
   useEffect(() => {
     if (isSocketConnected && socketRef.current) {
       googleSpeechService.initialize(socketRef.current)
         .then(() => {
-          const ready = googleSpeechService.isReady();
-          setIsServiceReady(ready);
-          // Apply saved microphone gain after initialization
-          if (ready) {
-            googleSpeechService.setMicrophoneGain(microphoneGain);
-          }
+          setIsServiceReady(googleSpeechService.isSocketReady())
         })
         .catch(error => {
           console.error('❌ Failed to initialize Google Speech Service:', error)
@@ -768,14 +818,13 @@ function InputApp() {
     } else {
       setIsServiceReady(false)
     }
-  }, [isSocketConnected, microphoneGain])
+  }, [isSocketConnected])
 
-  // Apply microphone gain whenever service becomes ready or gain changes
   useEffect(() => {
-    if (isServiceReady && googleSpeechService.isReady()) {
+    if (googleSpeechService.isMicrophoneReady()) {
       googleSpeechService.setMicrophoneGain(microphoneGain)
     }
-  }, [isServiceReady, microphoneGain])
+  }, [microphoneGain])
 
   // Cleanup Google Speech Service on unmount
   useEffect(() => {
@@ -865,38 +914,63 @@ function InputApp() {
 
   // Google Cloud Speech-to-Text handlers
   const startGoogleSpeechRecognition = useCallback(async () => {
-
     try {
-      // Check if Google Speech Service is ready
-      if (!googleSpeechService.isReady()) {
-        console.error('❌ Google Speech Service not ready, attempting to initialize...');
-
-        // Try to initialize if socket is connected
-        if (isSocketConnected && socketRef.current) {
-          try {
-            await googleSpeechService.initialize(socketRef.current)
-          } catch (initError) {
-            console.error('❌ Failed to initialize Google Speech Service:', initError)
-            setErrorMessage('Initializing speech recognition...')
-            setTimeout(() => setErrorMessage(null), 5000)
-            return
-          }
-        } else {
-          setErrorMessage('Connecting to server...')
-          setTimeout(() => setErrorMessage(null), 5000)
-          return
-        }
+      if (!isSocketConnected || !socketRef.current) {
+        setErrorMessage('Connecting to server...')
+        return
       }
 
+      setReconnectNotice(null)
+
+      // Acquire mic first while still inside the user-gesture handler (required on iOS).
+      await googleSpeechService.ensureMicrophone({
+        deviceId: selectedDeviceId ?? undefined,
+        onMicrophoneLost: handleMicrophoneLost,
+      })
+      googleSpeechService.setMicrophoneGain(microphoneGain)
+      setMicPermissionDenied(false)
+      setMicNeedsPrompt(false)
       setErrorMessage(null)
+
+      if (!googleSpeechService.isSocketReady()) {
+        await googleSpeechService.initialize(socketRef.current)
+        setIsServiceReady(googleSpeechService.isSocketReady())
+      }
+
       await startGoogleSpeechRecognitionInternal()
-    } catch (error: any) {
+      setShouldBeListening(true)
+    } catch (error: unknown) {
       console.error('❌ Failed to start Google Speech recognition:', error)
-      setErrorMessage('Failed to start speech recognition')
-      setTimeout(() => setErrorMessage(null), 5000)
+      const message =
+        error instanceof Error
+          ? error.message
+          : getMicrophoneErrorMessage(error)
+      setErrorMessage(message)
+      setShouldBeListening(false)
       setIsTranslating(false)
+      googleSpeechService.releaseMicrophone()
+      setMicAccessResetKey((k) => k + 1)
+
+      const permission = await queryMicrophonePermission()
+      if (permission === 'denied') {
+        setMicPermissionDenied(true)
+      } else if (needsMicrophonePrompt(permission)) {
+        setMicNeedsPrompt(true)
+      }
     }
-  }, [sourceLanguage, speechConfig, isSocketConnected, startGoogleSpeechRecognitionInternal, shouldBeListening])
+  }, [
+    isSocketConnected,
+    selectedDeviceId,
+    microphoneGain,
+    handleMicrophoneLost,
+    startGoogleSpeechRecognitionInternal,
+  ])
+
+  const handleStartRecording = useCallback(async () => {
+    setConfirmDialogOpen(false)
+    setReconnectNotice(null)
+    await startGoogleSpeechRecognition()
+  }, [startGoogleSpeechRecognition])
 
   const stopGoogleSpeechRecognition = useCallback(() => {
     // If there's current interim transcription, submit it as final
@@ -942,16 +1016,12 @@ function InputApp() {
     setIsTranslating(false)
   }, [currentTranscription, socketRef, isSocketConnected, sourceLanguage])
 
-  // Handle Google Cloud Speech-to-Text
+  // Stop recording when user toggles off (start runs from handleStartRecording on gesture)
   useEffect(() => {
-    if (isSocketConnected) {
-      if (shouldBeListening) {
-        startGoogleSpeechRecognition()
-      } else {
-        stopGoogleSpeechRecognition()
-      }
+    if (!shouldBeListening) {
+      stopGoogleSpeechRecognition()
     }
-  }, [shouldBeListening, isSocketConnected, startGoogleSpeechRecognition, stopGoogleSpeechRecognition])
+  }, [shouldBeListening, stopGoogleSpeechRecognition])
 
 
   const downloadQRCode = () => {
@@ -1017,7 +1087,10 @@ function InputApp() {
               disabled={!isServiceReady}
               onClick={() => {
                 if (isTranslating) setShouldBeListening(false)
-                else setConfirmDialogOpen(true)
+                else {
+                  setReconnectNotice(null)
+                  setConfirmDialogOpen(true)
+                }
               }}
               sx={{ 
                 minWidth: '64px', width: '64px', height: '48px', 
@@ -1030,6 +1103,27 @@ function InputApp() {
             </Button>
           </Box>
 
+          {micPermissionDenied && (
+            <Alert severity="warning" sx={{ borderRadius: '1rem' }}>
+              Microphone access is blocked for this site. In Safari: Settings → Websites →
+              Microphone, allow this page, then tap Start Recording again.
+            </Alert>
+          )}
+          {micNeedsPrompt && !micPermissionDenied && (
+            <Alert severity="info" sx={{ borderRadius: '1rem' }}>
+              Tap Start Recording to allow microphone access for this session.
+            </Alert>
+          )}
+          {reconnectNotice && (
+            <Alert
+              severity="info"
+              sx={{ borderRadius: '1rem' }}
+              onClose={() => setReconnectNotice(null)}
+            >
+              {reconnectNotice}
+            </Alert>
+          )}
+
           <Collapse in={settingsExpanded}>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: '8px', mt: '4px' }}>
               <RecordingPreferences 
@@ -1041,6 +1135,7 @@ function InputApp() {
                   selectedDeviceId={selectedDeviceId}
                   onDeviceChange={setSelectedDeviceId}
                   disabled={isTranslating}
+                  micAccessResetKey={micAccessResetKey}
                 />
                 <Box sx={{ marginTop: '1rem' }}>
                   <Tooltip title="Lower values reduce background noise, breathing, and static. Adjust in real-time during recording.">
@@ -1209,6 +1304,7 @@ function InputApp() {
               selectedDeviceId={selectedDeviceId}
               onDeviceChange={setSelectedDeviceId}
               disabled={isTranslating}
+              micAccessResetKey={micAccessResetKey}
             />
             <Box>
               <Tooltip title="Lower values reduce background noise, breathing, and static. Adjust in real-time during recording.">
@@ -1257,6 +1353,26 @@ function InputApp() {
               </Tooltip>
             </Box>
           </Box>
+          {micPermissionDenied && (
+            <Alert severity="warning" sx={{ borderRadius: '1rem', marginTop: '1rem' }}>
+              Microphone access is blocked for this site. In Safari: Settings → Websites →
+              Microphone, allow this page, then tap Start Recording again.
+            </Alert>
+          )}
+          {micNeedsPrompt && !micPermissionDenied && (
+            <Alert severity="info" sx={{ borderRadius: '1rem', marginTop: '1rem' }}>
+              Tap Start Recording to allow microphone access for this session.
+            </Alert>
+          )}
+          {reconnectNotice && (
+            <Alert
+              severity="info"
+              sx={{ borderRadius: '1rem', marginTop: '1rem' }}
+              onClose={() => setReconnectNotice(null)}
+            >
+              {reconnectNotice}
+            </Alert>
+          )}
           <Button
             variant="contained"
             color="primary"
@@ -1269,11 +1385,12 @@ function InputApp() {
               if (isTranslating) {
                 setShouldBeListening(false)
               } else {
+                setReconnectNotice(null)
                 setConfirmDialogOpen(true)
               }
             }}
           >
-            {!isServiceReady ? 'Initializing...' : isTranslating ? 'Translating...' : 'Translate'}
+            {!isServiceReady ? 'Connecting...' : isTranslating ? 'Translating...' : 'Translate'}
           </Button>
           <QRCodeSection>
             <Typography variant="subsectionHeader" sx={{ textAlign: 'center' }}>
@@ -1491,8 +1608,7 @@ function InputApp() {
           </Button>
           <Button 
             onClick={() => {
-              setConfirmDialogOpen(false)
-              setShouldBeListening(true)
+              void handleStartRecording()
             }} 
             variant="contained" 
             sx={{ borderRadius: '1rem', px: 3 }}

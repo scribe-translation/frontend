@@ -1,3 +1,12 @@
+import {
+  getMicrophoneErrorMessage,
+  isStreamLive,
+  queryMicrophonePermission,
+  watchStreamEnded,
+  type MicrophonePermissionState,
+  type StreamEndedCleanup,
+} from '../utils/microphonePermission';
+
 interface SpeechRecognitionConfig {
   languageCode: string;
   speechStartTimeout: number; // seconds to wait for speech to start
@@ -22,6 +31,12 @@ interface SpeechRecognitionCallbacks {
   onStart: () => void;
   onEnd: () => void;
   onAudioLevel?: (level: number) => void; // New callback for audio level updates
+}
+
+export interface EnsureMicrophoneOptions {
+  deviceId?: string;
+  force?: boolean;
+  onMicrophoneLost?: () => void;
 }
 
 class GoogleSpeechService {
@@ -57,6 +72,9 @@ class GoogleSpeechService {
   private streamHealthCheckInterval: NodeJS.Timeout | null = null; // For detecting hung streams
   /** Suppress duplicate Google isFinal after client-side silence finalization for the same bubble */
   private lastClientFinalizedBubbleId: string | null = null;
+  private activeDeviceId: string | undefined;
+  private streamEndedCleanup: StreamEndedCleanup | null = null;
+  private onMicrophoneLost: (() => void) | null = null;
 
   constructor() {
     this.config = {
@@ -70,41 +88,37 @@ class GoogleSpeechService {
   }
 
   /**
-   * Initialize the speech recognition service
+   * Wire socket listeners for speech recognition (no microphone access).
    */
   async initialize(socket: any): Promise<void> {
-    try {
-      // Check if socket connection has changed (even if same reference, ID may be different after reconnect)
-      const currentSocketId = socket?.id;
-      const socketChanged = this.lastSocketId !== currentSocketId;
-      
-      if (this.socket === socket && !socketChanged) {
-        return;
+    const currentSocketId = socket?.id;
+    const socketChanged = this.lastSocketId !== currentSocketId;
+
+    if (this.socket === socket && !socketChanged) {
+      return;
+    }
+
+    if (socketChanged) {
+      this.isRecording = false;
+      this.isPaused = false;
+      this.stopKeepAlive();
+      this.stopAudioLevelMonitoring();
+      if (this.scriptProcessor) {
+        this.scriptProcessor.disconnect();
+        this.scriptProcessor = null;
       }
-      
-      if (socketChanged) {
-        // Reset recording state on reconnection so startRecognition can run again
-        this.isRecording = false;
-        this.isPaused = false;
-        this.stopKeepAlive();
-        this.stopAudioLevelMonitoring();
-        if (this.scriptProcessor) {
-          this.scriptProcessor.disconnect();
-          this.scriptProcessor = null;
-        }
-      }
-      
-      // Clean up existing socket listeners before setting up new ones
-      if (this.socket) {
-        this.socket.removeAllListeners('transcriptionUpdate');
-        this.socket.removeAllListeners('finalResultReceived');
-        this.socket.removeAllListeners('streamRestarted');
-        this.socket.removeAllListeners('streamRestartPending');
-        this.socket.removeAllListeners('streamRestart');
-      }
-      
-      this.socket = socket;
-      this.lastSocketId = currentSocketId;
+    }
+
+    if (this.socket) {
+      this.socket.removeAllListeners('transcriptionUpdate');
+      this.socket.removeAllListeners('finalResultReceived');
+      this.socket.removeAllListeners('streamRestarted');
+      this.socket.removeAllListeners('streamRestartPending');
+      this.socket.removeAllListeners('streamRestart');
+    }
+
+    this.socket = socket;
+    this.lastSocketId = currentSocketId;
       
       // Listen for transcription updates from backend
       this.socket.on('transcriptionUpdate', (data: any) => {
@@ -239,94 +253,173 @@ class GoogleSpeechService {
         }
       });
       
-      // Handle socket reconnection - process any queued messages
-      this.socket.on('connect', () => {
-        // Process queued messages immediately after reconnection
-        setTimeout(() => {
-          this.processMessageQueue();
-        }, 100);
-      });
-      
-      // Detect if we're on a mobile/tablet device (helper function)
-      const detectMobileDevice = (): boolean => {
-        return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
-               (!!navigator.maxTouchPoints && navigator.maxTouchPoints > 2);
-      };
-      
-      const isMobileDevice = detectMobileDevice();
-      
-      // Request microphone access with device-appropriate audio processing
-      // Enable echo cancellation and noise suppression for better transcription quality
-      // autoGainControl disabled as it can distort speech and reduce transcription quality
+    this.socket.on('connect', () => {
+      setTimeout(() => {
+        this.processMessageQueue();
+      }, 100);
+    });
+
+    if (!this.socket) {
+      throw new Error('Failed to initialize: socket is not available');
+    }
+  }
+
+  /**
+   * Acquire or refresh microphone access (must be called from a user gesture on Safari).
+   */
+  async ensureMicrophone(options: EnsureMicrophoneOptions = {}): Promise<void> {
+    const deviceId = options.deviceId;
+    const force = options.force === true;
+    const deviceChanged =
+      deviceId !== undefined && deviceId !== this.activeDeviceId;
+
+    this.onMicrophoneLost = options.onMicrophoneLost ?? null;
+
+    if (
+      !force &&
+      isStreamLive(this.stream) &&
+      this.audioContext &&
+      !deviceChanged
+    ) {
+      await this.resumeAudioContext();
+      return;
+    }
+
+    this.releaseMicrophone();
+
+    try {
+      const isMobileDevice = this.detectMobileDevice();
       const audioConstraints: MediaTrackConstraints = {
-        echoCancellation: true,      // Reduces echo/feedback - important for quality
-        noiseSuppression: true,       // Reduces background noise - improves accuracy
-        autoGainControl: false        // Disabled - can distort speech and reduce quality
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: false,
       };
-      
-      // Some mobile devices may need specific sample rate
+
       if (isMobileDevice) {
         audioConstraints.sampleRate = { ideal: 48000 };
       }
-      
+
+      if (deviceId) {
+        audioConstraints.deviceId = { exact: deviceId };
+      }
+
       this.stream = await navigator.mediaDevices.getUserMedia({
-        audio: audioConstraints
+        audio: audioConstraints,
       });
-      
-      // Set up audio context with device-appropriate sample rate
-      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-      
-      // Use 48000 Hz sample rate (required by backend) - some mobile devices default to 44100
+
+      this.activeDeviceId = deviceId;
+
+      const AudioContextClass =
+        window.AudioContext || (window as any).webkitAudioContext;
+
       this.audioContext = new AudioContextClass({
-        sampleRate: 48000
+        sampleRate: 48000,
       });
-      
-      // If the context was created with a different sample rate, we need to handle it
+
       if (this.audioContext.sampleRate !== 48000) {
-        console.warn(`⚠️ AudioContext sample rate is ${this.audioContext.sampleRate}Hz, expected 48000Hz. This may cause issues on mobile.`);
+        console.warn(
+          `⚠️ AudioContext sample rate is ${this.audioContext.sampleRate}Hz, expected 48000Hz.`
+        );
       }
 
       this.analyser = this.audioContext.createAnalyser();
-      // Use larger FFT size for better frequency analysis on mobile
       this.analyser.fftSize = isMobileDevice ? 512 : 256;
-      this.analyser.smoothingTimeConstant = isMobileDevice ? 0.7 : 0.8; // Less smoothing on mobile for faster response
-      
-      // Create gain node for microphone volume control
+      this.analyser.smoothingTimeConstant = isMobileDevice ? 0.7 : 0.8;
+
       this.gainNode = this.audioContext.createGain();
-      this.gainNode.gain.value = 1.0; // Default: 100% (no adjustment)
-      
-      // Set up audio chain: microphone -> gain -> analyser
+      this.gainNode.gain.value = 1.0;
+
       this.microphone = this.audioContext.createMediaStreamSource(this.stream);
       this.microphone.connect(this.gainNode);
       this.gainNode.connect(this.analyser);
 
-      // Verify all components are set up correctly
-      if (!this.stream || !this.audioContext || !this.socket) {
-        const missing: string[] = [];
-        if (!this.stream) missing.push('stream');
-        if (!this.audioContext) missing.push('audioContext');
-        if (!this.socket) missing.push('socket');
-        throw new Error(`Failed to initialize: missing ${missing.join(', ')}`);
-      }
+      this.attachStreamLifecycleWatchers();
 
-
+      await this.resumeAudioContext();
     } catch (error) {
-      console.error('❌ Failed to initialize Google Speech Service:', error);
-      // Clean up any partially initialized state
-      if (this.stream) {
-        this.stream.getTracks().forEach(track => track.stop());
-        this.stream = null;
+      this.releaseMicrophone();
+      console.error('❌ Failed to access microphone:', error);
+      throw new Error(getMicrophoneErrorMessage(error));
+    }
+  }
+
+  private attachStreamLifecycleWatchers(): void {
+    if (this.streamEndedCleanup) {
+      this.streamEndedCleanup();
+      this.streamEndedCleanup = null;
+    }
+
+    if (!this.stream) {
+      return;
+    }
+
+    this.streamEndedCleanup = watchStreamEnded(this.stream, () => {
+      this.handleMicrophoneLost();
+    });
+  }
+
+  private handleMicrophoneLost(): void {
+    if (this.isRecording) {
+      this.stopRecognition();
+    }
+    this.releaseMicrophone();
+    this.onMicrophoneLost?.();
+  }
+
+  releaseMicrophone(): void {
+    if (this.streamEndedCleanup) {
+      this.streamEndedCleanup();
+      this.streamEndedCleanup = null;
+    }
+
+    if (this.microphone) {
+      try {
+        this.microphone.disconnect();
+      } catch {
+        /* ignore */
       }
-      if (this.audioContext) {
-        this.audioContext.close().catch(() => {});
-        this.audioContext = null;
-      }
-      this.analyser = null;
       this.microphone = null;
-      this.gainNode = null;
-      
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      throw new Error(`Failed to access microphone: ${errorMessage}. Please ensure microphone permissions are granted.`);
+    }
+
+    if (this.stream) {
+      this.stream.getTracks().forEach((track) => track.stop());
+      this.stream = null;
+    }
+
+    if (this.audioContext) {
+      this.audioContext.close().catch(() => {});
+      this.audioContext = null;
+    }
+
+    this.analyser = null;
+    this.gainNode = null;
+    this.activeDeviceId = undefined;
+  }
+
+  getStream(): MediaStream | null {
+    return this.stream;
+  }
+
+  async getMicrophonePermissionState(): Promise<MicrophonePermissionState> {
+    return queryMicrophonePermission();
+  }
+
+  private detectMobileDevice(): boolean {
+    return (
+      /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
+        navigator.userAgent
+      ) || (!!navigator.maxTouchPoints && navigator.maxTouchPoints > 2)
+    );
+  }
+
+  private async resumeAudioContext(): Promise<void> {
+    if (!this.audioContext) return;
+    if (this.audioContext.state === 'suspended') {
+      try {
+        await this.audioContext.resume();
+      } catch (error) {
+        console.warn('⚠️ Could not resume AudioContext:', error);
+      }
     }
   }
 
@@ -339,9 +432,15 @@ class GoogleSpeechService {
     }
 
 
-    if (!this.stream || !this.audioContext || !this.socket) {
+    if (!this.socket) {
       throw new Error('Service not initialized. Call initialize() first.');
     }
+
+    if (!this.isMicrophoneReady()) {
+      throw new Error('Microphone not ready. Call ensureMicrophone() first.');
+    }
+
+    await this.resumeAudioContext();
 
     this.callbacks = callbacks;
     this.isRecording = true;
@@ -471,8 +570,9 @@ class GoogleSpeechService {
       this.scriptProcessor = null;
     }
 
-    // Notify backend to stop streaming
-    this.socket.emit('stopStreaming');
+    if (this.socket) {
+      this.socket.emit('stopStreaming');
+    }
 
     this.callbacks?.onEnd();
   }
@@ -545,11 +645,17 @@ class GoogleSpeechService {
     return { ...this.config };
   }
 
-  /**
-   * Check if service is ready
-   */
+  isSocketReady(): boolean {
+    return this.socket !== null;
+  }
+
+  isMicrophoneReady(): boolean {
+    return isStreamLive(this.stream) && this.audioContext !== null;
+  }
+
+  /** @deprecated Use isSocketReady() or isMicrophoneReady() */
   isReady(): boolean {
-    return this.stream !== null && this.audioContext !== null && this.socket !== null;
+    return this.isMicrophoneReady() && this.isSocketReady();
   }
 
   /**
@@ -576,19 +682,9 @@ class GoogleSpeechService {
       this.socket.emit('stopStreaming');
     }
 
-    if (this.stream) {
-      this.stream.getTracks().forEach(track => track.stop());
-      this.stream = null;
-    }
-
-    if (this.audioContext) {
-      this.audioContext.close();
-      this.audioContext = null;
-    }
+    this.releaseMicrophone();
 
     this.mediaRecorder = null;
-    this.analyser = null;
-    this.microphone = null;
     this.scriptProcessor = null;
     this.callbacks = null;
     this.socket = null;

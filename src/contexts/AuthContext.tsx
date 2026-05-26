@@ -6,7 +6,7 @@ interface User {
   id: number
   email: string
   name: string
-  userCode?: string
+  sessionCode?: string
   createdAt: string
   updatedAt?: string
   totpEnabled?: boolean
@@ -20,7 +20,7 @@ interface AuthTokens {
 }
 
 interface ConnectionInfo {
-  userCode: string
+  sessionCode: string
   connectionUrl: string
   qrCodeUrl: string
   shareText: string
@@ -36,9 +36,9 @@ interface AuthContextType {
   logout: () => void
   refreshToken: () => Promise<boolean>
   updateTokens: (newTokens: AuthTokens) => void
-  generateUserCode: () => Promise<string>
-  setUserCode: (userCode: string) => Promise<void>
-  clearUserCode: () => Promise<void>
+  generateSessionCode: () => Promise<string>
+  setSessionCode: (sessionCode: string) => Promise<void>
+  clearSessionCode: () => Promise<void>
   getConnectionInfo: () => Promise<ConnectionInfo>
 }
 
@@ -46,6 +46,15 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
 interface AuthProviderProps {
   children: ReactNode
+}
+
+/** Map API user payloads to User (supports legacy `userCode` only). */
+function normalizeUser(raw: unknown): User | null {
+  if (!raw || typeof raw !== 'object') return null
+  const r = raw as Record<string, unknown> & { userCode?: string; sessionCode?: string }
+  const sessionCode = (r.sessionCode ?? r.userCode) as string | undefined
+  const { userCode: _legacyUserCode, sessionCode: _sc, ...rest } = r
+  return { ...rest, sessionCode: sessionCode || undefined } as User
 }
 
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
@@ -66,7 +75,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       
       if (response.ok) {
         const data = await response.json()
-        return data.user
+        return normalizeUser(data.user)
       }
       return null
     } catch (error) {
@@ -228,7 +237,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       }
 
       const data = await response.json()
-      setUser(data.user)
+      setUser(normalizeUser(data.user))
       setTokens(data.tokens)
     } catch (error) {
       console.error('Login error:', error)
@@ -252,7 +261,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       }
 
       const data = await response.json()
-      setUser(data.user)
+      setUser(normalizeUser(data.user))
       setTokens(data.tokens)
     } catch (error) {
       console.error('Registration error:', error)
@@ -288,7 +297,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       const data = await response.json()
       setTokens(data.tokens)
       
-      // Fetch fresh user data after token refresh
       const freshUserData = await fetchUserData(data.tokens.accessToken)
       if (freshUserData) {
         setUser(freshUserData)
@@ -307,13 +315,13 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     localStorage.setItem('authTokens', JSON.stringify(newTokens))
   }
 
-  const generateUserCode = async (): Promise<string> => {
+  const generateSessionCode = async (): Promise<string> => {
     if (!tokens) {
       throw new Error('No authentication tokens available')
     }
 
     try {
-      const response = await fetch(`${CONFIG.BACKEND_URL}/auth/generate-user-code`, {
+      const response = await fetch(`${CONFIG.BACKEND_URL}/auth/generate-session-code`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${tokens.accessToken}`
@@ -322,62 +330,64 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
       if (!response.ok) {
         const errorData = await response.json()
-        throw new Error(errorData.error || 'Failed to generate user code')
+        throw new Error(errorData.error || 'Failed to generate session code')
       }
 
-      const data = await response.json()
-      
-      // Update user with new code
+      const data = await response.json() as { sessionCode?: string; userCode?: string }
+      const newCode = data.sessionCode ?? data.userCode
+      if (!newCode) {
+        throw new Error('No session code in response')
+      }
+
       if (user) {
-        const updatedUser = { ...user, userCode: data.userCode }
+        const updatedUser = { ...user, sessionCode: newCode }
         setUser(updatedUser)
       }
 
-      return data.userCode
+      return newCode
     } catch (error) {
-      console.error('Generate user code error:', error)
+      console.error('Generate session code error:', error)
       throw error
     }
   }
 
-  const setUserCode = async (userCode: string): Promise<void> => {
+  const setSessionCode = async (sessionCode: string): Promise<void> => {
     if (!tokens) {
       throw new Error('No authentication tokens available')
     }
 
     try {
-      const response = await fetch(`${CONFIG.BACKEND_URL}/auth/set-user-code`, {
+      const response = await fetch(`${CONFIG.BACKEND_URL}/auth/set-session-code`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${tokens.accessToken}`
         },
-        body: JSON.stringify({ userCode })
+        body: JSON.stringify({ sessionCode })
       })
 
       if (!response.ok) {
         const errorData = await response.json()
-        throw new Error(errorData.error || 'Failed to set user code')
+        throw new Error(errorData.error || 'Failed to set session code')
       }
 
-      // Update user with new code
       if (user) {
-        const updatedUser = { ...user, userCode }
+        const updatedUser = { ...user, sessionCode }
         setUser(updatedUser)
       }
     } catch (error) {
-      console.error('Set user code error:', error)
+      console.error('Set session code error:', error)
       throw error
     }
   }
 
-  const clearUserCode = async (): Promise<void> => {
+  const clearSessionCode = async (): Promise<void> => {
     if (!tokens) {
       throw new Error('No authentication tokens available')
     }
 
     try {
-      const response = await fetch(`${CONFIG.BACKEND_URL}/auth/user-code`, {
+      const response = await fetch(`${CONFIG.BACKEND_URL}/auth/session-code`, {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${tokens.accessToken}`
@@ -386,16 +396,15 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
       if (!response.ok) {
         const errorData = await response.json()
-        throw new Error(errorData.error || 'Failed to clear user code')
+        throw new Error(errorData.error || 'Failed to clear session code')
       }
 
-      // Update user to remove code
       if (user) {
-        const updatedUser = { ...user, userCode: undefined }
+        const updatedUser = { ...user, sessionCode: undefined }
         setUser(updatedUser)
       }
     } catch (error) {
-      console.error('Clear user code error:', error)
+      console.error('Clear session code error:', error)
       throw error
     }
   }
@@ -418,7 +427,11 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         throw new Error(errorData.error || 'Failed to get connection info')
       }
 
-      return await response.json()
+      const raw = await response.json() as ConnectionInfo & { userCode?: string }
+      return {
+        ...raw,
+        sessionCode: raw.sessionCode ?? raw.userCode ?? '',
+      }
     } catch (error) {
       console.error('Get connection info error:', error)
       throw error
@@ -435,9 +448,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     logout,
     refreshToken,
     updateTokens,
-    generateUserCode,
-    setUserCode,
-    clearUserCode,
+    generateSessionCode,
+    setSessionCode,
+    clearSessionCode,
     getConnectionInfo,
   }
 

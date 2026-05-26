@@ -1,78 +1,86 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react'
 
-interface UserCodeContextType {
-  userCode: string | null
-  setUserCode: (code: string) => void
-  clearUserCode: () => void
+interface SessionCodeContextType {
+  sessionCode: string | null
+  setSessionCode: (code: string) => void
+  clearSessionCode: () => void
 }
 
-const UserCodeContext = createContext<UserCodeContextType | undefined>(undefined)
+const SessionCodeContext = createContext<SessionCodeContextType | undefined>(undefined)
 
-interface UserCodeProviderProps {
+interface SessionCodeProviderProps {
   children: ReactNode
 }
 
-export const UserCodeProvider: React.FC<UserCodeProviderProps> = ({ children }) => {
-  const [userCode, setUserCodeState] = useState<string | null>(null)
+export const SessionCodeProvider: React.FC<SessionCodeProviderProps> = ({ children }) => {
+  const [sessionCode, setSessionCodeState] = useState<string | null>(null)
 
-  // Load user code from localStorage on mount
+  // Load session code from localStorage on mount (migrate legacy scribeUserCode)
   useEffect(() => {
-    const storedUserCode = localStorage.getItem('scribeUserCode')
-    if (storedUserCode) {
-      // Validate user code format (3-8 alphanumeric characters)
-      if (/^[A-Z0-9]{3,8}$/.test(storedUserCode)) {
-        setUserCodeState(storedUserCode)
-        console.log('🔗 UserCodeContext - Loaded user code from localStorage:', storedUserCode)
-      } else {
-        console.log('🔗 UserCodeContext - Invalid user code format, clearing:', storedUserCode)
+    let storedSessionCode = localStorage.getItem('scribeSessionCode')
+    if (!storedSessionCode) {
+      const legacy = localStorage.getItem('scribeUserCode')
+      if (legacy && /^[A-Z0-9]{3,8}$/.test(legacy)) {
+        storedSessionCode = legacy
+        localStorage.setItem('scribeSessionCode', legacy)
         localStorage.removeItem('scribeUserCode')
-        setUserCodeState(null)
+      }
+    }
+    if (storedSessionCode) {
+      // Validate session code format (3-8 alphanumeric characters)
+      if (/^[A-Z0-9]{3,8}$/.test(storedSessionCode)) {
+        setSessionCodeState(storedSessionCode)
+        console.log('🔗 SessionCodeContext - Loaded session code from localStorage:', storedSessionCode)
+      } else {
+        console.log('🔗 SessionCodeContext - Invalid session code format, clearing:', storedSessionCode)
+        localStorage.removeItem('scribeSessionCode')
+        setSessionCodeState(null)
       }
     }
   }, [])
 
-  // Store user code in localStorage when it changes
+  // Store session code in localStorage when it changes
   useEffect(() => {
-    if (userCode) {
-      localStorage.setItem('scribeUserCode', userCode)
+    if (sessionCode) {
+      localStorage.setItem('scribeSessionCode', sessionCode)
     } else {
-      localStorage.removeItem('scribeUserCode')
+      localStorage.removeItem('scribeSessionCode')
     }
-  }, [userCode])
+  }, [sessionCode])
 
-  const setUserCode = (code: string): void => {
-    // Validate user code format
+  const setSessionCode = (code: string): void => {
+    // Validate session code format
     if (!/^[A-Z0-9]{3,8}$/.test(code)) {
-      console.error('🔗 UserCodeContext - Invalid user code format:', code)
+      console.error('🔗 SessionCodeContext - Invalid session code format:', code)
       return
     }
-    console.log('🔗 UserCodeContext - Setting user code:', code)
-    setUserCodeState(code)
+    console.log('🔗 SessionCodeContext - Setting session code:', code)
+    setSessionCodeState(code)
   }
 
-  const clearUserCode = (): void => {
-    console.log('🔗 UserCodeContext - Clearing user code')
-    setUserCodeState(null)
-    localStorage.removeItem('scribeUserCode')
+  const clearSessionCode = (): void => {
+    console.log('🔗 SessionCodeContext - Clearing session code')
+    setSessionCodeState(null)
+    localStorage.removeItem('scribeSessionCode')
   }
 
-  const value: UserCodeContextType = {
-    userCode,
-    setUserCode,
-    clearUserCode,
+  const value: SessionCodeContextType = {
+    sessionCode,
+    setSessionCode,
+    clearSessionCode,
   }
 
-  return <UserCodeContext.Provider value={value}>{children}</UserCodeContext.Provider>
+  return <SessionCodeContext.Provider value={value}>{children}</SessionCodeContext.Provider>
 }
 
-export const useUserCode = (): UserCodeContextType => {
-  const context = useContext(UserCodeContext)
+export const useSessionCode = (): SessionCodeContextType => {
+  const context = useContext(SessionCodeContext)
   if (context === undefined) {
-    throw new Error('useUserCode must be used within a UserCodeProvider')
+    throw new Error('useSessionCode must be used within a SessionCodeProvider')
   }
   return context
 }
 
-export const SessionProvider = UserCodeProvider
-export const useSession = useUserCode
-export default UserCodeContext
+export const SessionProvider = SessionCodeProvider
+export const useSession = useSessionCode
+export default SessionCodeContext

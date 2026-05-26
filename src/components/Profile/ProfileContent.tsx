@@ -63,7 +63,7 @@ interface User {
   id: number
   email: string
   name: string
-  userCode?: string
+  sessionCode?: string
   createdAt: string
   updatedAt?: string
   totpEnabled?: boolean
@@ -76,13 +76,13 @@ interface ProfileContentProps {
 }
 
 const ProfileContent: React.FC<ProfileContentProps> = ({ user }) => {
-  const { generateUserCode, setUserCode, clearUserCode } = useAuth()
+  const { generateSessionCode, setSessionCode, clearSessionCode } = useAuth()
   const [totpSetupOpen, setTotpSetupOpen] = useState(false)
   const [totpEnabled, setTotpEnabled] = useState(user?.totpEnabled || false)
-  const [userCodeError, setUserCodeError] = useState<string | null>(null)
+  const [sessionCodeError, setSessionCodeError] = useState<string | null>(null)
   const [totpError, setTotpError] = useState<string | null>(null)
-  const [isEditingUserCode, setIsEditingUserCode] = useState(false)
-  const [customUserCode, setCustomUserCode] = useState('')
+  const [isEditingSessionCode, setIsEditingSessionCode] = useState(false)
+  const [customSessionCode, setCustomSessionCode] = useState('')
   const [isGeneratingCode, setIsGeneratingCode] = useState(false)
   const [isSettingCode, setIsSettingCode] = useState(false)
   const [isClearingCode, setIsClearingCode] = useState(false)
@@ -91,54 +91,54 @@ const ProfileContent: React.FC<ProfileContentProps> = ({ user }) => {
     setTotpEnabled(user?.totpEnabled || false)
   }, [user?.totpEnabled])
 
-  const handleGenerateUserCode = async () => {
+  const handleGenerateSessionCode = async () => {
     setIsGeneratingCode(true)
-    setUserCodeError(null)
+    setSessionCodeError(null)
     try {
-      await generateUserCode()
-      setIsEditingUserCode(false)
+      await generateSessionCode()
+      setIsEditingSessionCode(false)
     } catch (error) {
-      setUserCodeError(error instanceof Error ? error.message : 'Failed to generate user code')
+      setSessionCodeError(error instanceof Error ? error.message : 'Failed to generate session code')
     } finally {
       setIsGeneratingCode(false)
     }
   }
 
-  const handleSetCustomUserCode = async () => {
-    if (!customUserCode.trim()) return
-    if (!/^[A-Z0-9]{3,8}$/.test(customUserCode.trim().toUpperCase())) {
-      setUserCodeError('User code must be 3-8 alphanumeric characters')
+  const handleSetCustomSessionCode = async () => {
+    if (!customSessionCode.trim()) return
+    if (!/^[A-Z0-9]{3,8}$/.test(customSessionCode.trim().toUpperCase())) {
+      setSessionCodeError('Session code must be 3-8 alphanumeric characters')
       return
     }
     setIsSettingCode(true)
-    setUserCodeError(null)
+    setSessionCodeError(null)
     try {
-      await setUserCode(customUserCode.trim().toUpperCase())
-      setCustomUserCode('')
-      setIsEditingUserCode(false)
+      await setSessionCode(customSessionCode.trim().toUpperCase())
+      setCustomSessionCode('')
+      setIsEditingSessionCode(false)
     } catch (error) {
-      setUserCodeError(error instanceof Error ? error.message : 'Failed to set user code')
+      setSessionCodeError(error instanceof Error ? error.message : 'Failed to set session code')
     } finally {
       setIsSettingCode(false)
     }
   }
 
-  const handleClearUserCode = async () => {
+  const handleClearSessionCode = async () => {
     setIsClearingCode(true)
-    setUserCodeError(null)
+    setSessionCodeError(null)
     try {
-      await clearUserCode()
-      setIsEditingUserCode(false)
+      await clearSessionCode()
+      setIsEditingSessionCode(false)
     } catch (error) {
-      setUserCodeError(error instanceof Error ? error.message : 'Failed to clear user code')
+      setSessionCodeError(error instanceof Error ? error.message : 'Failed to clear session code')
     } finally {
       setIsClearingCode(false)
     }
   }
 
-  const handleCopyUserCode = () => {
-    if (user?.userCode) {
-      navigator.clipboard.writeText(user.userCode)
+  const handleCopySessionCode = () => {
+    if (user?.sessionCode) {
+      navigator.clipboard.writeText(user.sessionCode)
     }
   }
 
@@ -214,18 +214,18 @@ const ProfileContent: React.FC<ProfileContentProps> = ({ user }) => {
         
         <Box>
           <Typography variant="sectionHeader" sx={{ marginBottom: '0.5rem' }}>
-            User Code Management
+            Session Code Management
           </Typography>
           
-          {!isEditingUserCode ? (
+          {!isEditingSessionCode ? (
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <Typography variant="bodyText" sx={{ color: 'text.secondary' }}>
-                  <strong>Current Code:</strong> {user?.userCode || 'Not set'}
+                  <strong>Current Code:</strong> {user?.sessionCode || 'Not set'}
                 </Typography>
-                {user?.userCode && (
+                {user?.sessionCode && (
                   <Tooltip title="Copy to clipboard">
-                    <IconButton size="small" onClick={handleCopyUserCode}>
+                    <IconButton size="small" onClick={handleCopySessionCode}>
                       <ContentCopyIcon fontSize="small" />
                     </IconButton>
                   </Tooltip>
@@ -237,7 +237,7 @@ const ProfileContent: React.FC<ProfileContentProps> = ({ user }) => {
                   variant="outlined"
                   size="small"
                   startIcon={<RefreshIcon />}
-                  onClick={handleGenerateUserCode}
+                  onClick={handleGenerateSessionCode}
                   disabled={isGeneratingCode}
                   sx={{ borderRadius: '1rem' }}
                 >
@@ -248,19 +248,19 @@ const ProfileContent: React.FC<ProfileContentProps> = ({ user }) => {
                   variant="outlined"
                   size="small"
                   startIcon={<EditIcon />}
-                  onClick={() => setIsEditingUserCode(true)}
+                  onClick={() => setIsEditingSessionCode(true)}
                   sx={{ borderRadius: '1rem' }}
                 >
                   Set Custom
                 </Button>
                 
-                {user?.userCode && (
+                {user?.sessionCode && (
                   <Button
                     variant="outlined"
                     color="error"
                     size="small"
                     startIcon={<ClearIcon />}
-                    onClick={handleClearUserCode}
+                    onClick={handleClearSessionCode}
                     disabled={isClearingCode}
                     sx={{ borderRadius: '1rem' }}
                   >
@@ -272,9 +272,9 @@ const ProfileContent: React.FC<ProfileContentProps> = ({ user }) => {
           ) : (
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               <TextField
-                label="Custom User Code"
-                value={customUserCode}
-                onChange={(e) => setCustomUserCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8))}
+                label="Custom Session Code"
+                value={customSessionCode}
+                onChange={(e) => setCustomSessionCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8))}
                 placeholder="ABC123"
                 variant="outlined"
                 size="small"
@@ -291,8 +291,8 @@ const ProfileContent: React.FC<ProfileContentProps> = ({ user }) => {
                 <Button
                   variant="contained"
                   size="small"
-                  onClick={handleSetCustomUserCode}
-                  disabled={!customUserCode.trim() || isSettingCode}
+                  onClick={handleSetCustomSessionCode}
+                  disabled={!customSessionCode.trim() || isSettingCode}
                   sx={{ borderRadius: '1rem' }}
                 >
                   {isSettingCode ? 'Setting...' : 'Set Code'}
@@ -301,7 +301,7 @@ const ProfileContent: React.FC<ProfileContentProps> = ({ user }) => {
                 <Button
                   variant="outlined"
                   size="small"
-                  onClick={() => setIsEditingUserCode(false)}
+                  onClick={() => setIsEditingSessionCode(false)}
                   disabled={isSettingCode}
                   sx={{ borderRadius: '1rem' }}
                 >
@@ -311,9 +311,9 @@ const ProfileContent: React.FC<ProfileContentProps> = ({ user }) => {
             </Box>
           )}
           
-          {userCodeError && (
+          {sessionCodeError && (
             <Alert severity="error" sx={{ marginTop: '0.5rem' }}>
-              {userCodeError}
+              {sessionCodeError}
             </Alert>
           )}
         </Box>

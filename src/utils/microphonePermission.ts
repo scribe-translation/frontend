@@ -6,7 +6,6 @@ export function isStreamLive(stream: MediaStream | null): boolean {
   return tracks.length > 0 && tracks.some((t) => t.readyState === 'live' && t.enabled);
 }
 
-/** Runtime check that the stream has live mic access (alias for isStreamLive). */
 export function hasMicrophoneAccess(stream: MediaStream | null): boolean {
   return isStreamLive(stream);
 }
@@ -15,7 +14,6 @@ export function isIOSWebKit(): boolean {
   return /iPad|iPhone|iPod/.test(navigator.userAgent);
 }
 
-/** For banner UI only — whether we should nudge the user to tap Start Recording. */
 export function needsMicrophonePrompt(state: MicrophonePermissionState): boolean {
   if (state === 'prompt') return true;
   if (isIOSWebKit() && state === 'unknown') return true;
@@ -24,9 +22,6 @@ export function needsMicrophonePrompt(state: MicrophonePermissionState): boolean
 
 export type StreamEndedCleanup = () => void;
 
-/**
- * Notify when iOS/Safari revokes or ends audio tracks (background, permission change).
- */
 export function watchStreamEnded(
   stream: MediaStream,
   onEnded: () => void

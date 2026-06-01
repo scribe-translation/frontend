@@ -50,7 +50,6 @@ class GoogleSpeechService {
   private isRecording = false;
   private isPaused = false;
   private currentBubbleId: string | null = null;
-  private previousBubbleId: string | null = null; // Track previous bubble to handle late results
   private currentWordCount = 0;
   private currentTranscript = '';
   private config: SpeechRecognitionConfig;
@@ -112,9 +111,8 @@ class GoogleSpeechService {
     if (this.socket) {
       this.socket.removeAllListeners('transcriptionUpdate');
       this.socket.removeAllListeners('finalResultReceived');
-      this.socket.removeAllListeners('streamRestarted');
-      this.socket.removeAllListeners('streamRestartPending');
       this.socket.removeAllListeners('streamRestart');
+      this.socket.removeAllListeners('forceFinalize');
     }
 
     this.socket = socket;
@@ -122,16 +120,10 @@ class GoogleSpeechService {
       
       // Listen for transcription updates from backend
       this.socket.on('transcriptionUpdate', (data: any) => {
-        // Accept results from current or previous bubble (for late results after stream restart)
         const isCurrentBubble = data.bubbleId === this.currentBubbleId;
-        const isPreviousBubble = data.bubbleId === this.previousBubbleId;
-        
-        // Debug logging for transcription flow
-        
-        // For FINAL results: accept from current OR previous bubble (catch late finals)
-        // For INTERIM results: ONLY accept from current bubble (prevents bouncing during restart)
+
         if (data.isFinal) {
-          if (!isCurrentBubble && !isPreviousBubble) {
+          if (!isCurrentBubble) {
             return;
           }
 
@@ -151,32 +143,21 @@ class GoogleSpeechService {
               wordCount: this.currentWordCount,
               bubbleId: data.bubbleId
             });
-            // Clear current transcript since we've received a final result
-            if (isCurrentBubble) {
-              this.currentTranscript = '';
-              this.hasReceivedFinalResult = true;
-            }
-            // Clear previous bubble ID after receiving its final result
-            if (isPreviousBubble) {
-              this.previousBubbleId = null;
-            }
+            this.currentTranscript = '';
+            this.hasReceivedFinalResult = true;
           }
         } else {
-          // INTERIM results: only accept from current bubble to prevent bouncing
           if (!isCurrentBubble) {
             return;
           }
-          
+
           if (this.callbacks?.onInterimResult) {
-            // Track the current transcript so we can save it on stream restart
             this.currentTranscript = data.transcript;
-            // Update word count for silence detection
             this.currentWordCount = data.transcript.trim().split(/\s+/).filter(w => w.length > 0).length;
-            // Reset silence detection when we get new interim results (speech is active)
             this.lastSpeechTime = Date.now();
-            this.lastInterimResultTime = Date.now(); // Track when we last got an interim result
+            this.lastInterimResultTime = Date.now();
             this.silenceStartTime = null;
-            
+
             this.callbacks.onInterimResult({
               transcript: data.transcript,
               isFinal: data.isFinal,
@@ -195,42 +176,14 @@ class GoogleSpeechService {
         }
       });
       
-      // Listen for stream restart notifications
-      this.socket.on('streamRestarted', (data: any) => {
-        if (data?.newBubbleId != null && data.newBubbleId !== '') {
-          this.currentBubbleId = data.newBubbleId;
-        }
-        this.hasReceivedFinalResult = false;
-      });
-      
-      // Listen for PENDING stream restart - this is sent BEFORE the new stream starts
-      // We MUST update bubbleId here so the new stream uses a different ID than the old stream
-      this.socket.on('streamRestartPending', (data: any) => {
-        if (this.isRecording) {
-          this.lastClientFinalizedBubbleId = null;
-          // Save current bubble ID as previous to allow late FINAL results to come through
-          this.previousBubbleId = this.currentBubbleId;
-          // Generate new bubble ID IMMEDIATELY so new stream uses different ID
-          this.currentBubbleId = this.generateBubbleId();
-          // DON'T clear currentTranscript here - InputApp handles saving the displayed text
-          this.hasReceivedFinalResult = false;
-        }
-      });
-      
-      // Listen for stream restart requests from backend (for error recovery or language change)
-      // Note: InputApp.tsx handles saving displayed interim text on stream restart
-      // This handler only manages internal state for the new stream
+      // Listen for stream restart requests from backend (error recovery or language change)
       this.socket.on('streamRestart', (data: any) => {
         if (this.isRecording) {
-          // If restart is due to language change, clear everything immediately
           if (data.reason === 'language_changed') {
-            // Clear all state for language change
             this.currentTranscript = '';
             this.lastClientFinalizedBubbleId = null;
-            this.previousBubbleId = null; // Don't accept late results from old language
             this.currentBubbleId = this.generateBubbleId();
             this.hasReceivedFinalResult = false;
-            // Clear the displayed transcript via callback
             if (this.callbacks?.onInterimResult) {
               this.callbacks.onInterimResult({
                 transcript: '',
@@ -241,16 +194,60 @@ class GoogleSpeechService {
               });
             }
           } else {
-            // For other restart reasons, save current state
             this.lastClientFinalizedBubbleId = null;
-            // Save current bubble ID as previous to allow late results to come through
-            this.previousBubbleId = this.currentBubbleId;
-            // Generate new bubble ID and continue recording
             this.currentBubbleId = this.generateBubbleId();
-            this.currentTranscript = ''; // Reset for new bubble
+            this.currentTranscript = '';
             this.hasReceivedFinalResult = false;
           }
         }
+      });
+
+      this.socket.on('forceFinalize', () => {
+        if (!this.isRecording) {
+          this.socket?.emit('forceFinalizeAck', {});
+          return;
+        }
+
+        const finalTranscript = this.currentTranscript.trim();
+        const finalBubbleId = this.currentBubbleId || this.generateBubbleId();
+
+        if (finalTranscript) {
+          this.lastClientFinalizedBubbleId = finalBubbleId;
+
+          if (this.socket && this.socket.connected) {
+            this.socket.emit('googleSpeechTranscription', {
+              audioData: '',
+              sourceLanguage: this.config.languageCode,
+              bubbleId: finalBubbleId,
+              isFinal: true,
+              interimTranscript: '',
+              finalTranscript: finalTranscript,
+              wordCount: this.currentWordCount,
+              maxWordsPerBubble: this.config.maxWordsPerBubble,
+              audioFormat: 'LINEAR16',
+              sampleRate: 48000
+            });
+          }
+
+          if (this.callbacks?.onFinalResult) {
+            this.callbacks.onFinalResult({
+              transcript: finalTranscript,
+              isFinal: true,
+              confidence: 0.8,
+              wordCount: this.currentWordCount,
+              bubbleId: finalBubbleId
+            });
+          }
+
+          this.currentTranscript = '';
+          this.currentBubbleId = this.generateBubbleId();
+          this.currentWordCount = 0;
+          this.lastSpeechTime = Date.now();
+          this.silenceStartTime = null;
+          this.hasReceivedFinalResult = false;
+        }
+
+        this.socket?.emit('forceFinalizeAck', {});
       });
       
     this.socket.on('connect', () => {
@@ -445,7 +442,6 @@ class GoogleSpeechService {
     this.callbacks = callbacks;
     this.isRecording = true;
     this.isPaused = false;
-    this.previousBubbleId = null; // Clear any previous bubble ID when starting fresh
     this.currentBubbleId = this.generateBubbleId();
     this.lastClientFinalizedBubbleId = null;
     this.currentWordCount = 0;
@@ -622,7 +618,6 @@ class GoogleSpeechService {
     if (languageChanged && this.isRecording) {
       this.currentTranscript = '';
       this.lastClientFinalizedBubbleId = null;
-      this.previousBubbleId = null; // Don't accept late results from old language
       this.currentBubbleId = this.generateBubbleId();
       this.hasReceivedFinalResult = false;
       // Clear the displayed transcript immediately

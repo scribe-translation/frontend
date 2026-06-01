@@ -336,8 +336,6 @@ function InputApp() {
   const qrCodeRef = useRef<HTMLDivElement>(null)
   const currentTranscriptionRef = React.useRef<string>('') // Ref to track current transcription for stream restart handler
   const sourceLanguageRef = React.useRef<string>('en-CA') // Ref to track source language for stream restart handler
-  const pendingTranscriptionRef = React.useRef<{ id: string; text: string; sourceLanguage: string; timestamp: number } | null>(null) // For pending transcription during overlap
-  const pendingPromotionTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null) // Timeout to promote pending transcription
 
   // Connection health monitoring refs
   const lastPongTimeRef = React.useRef<number>(Date.now())
@@ -605,73 +603,8 @@ function InputApp() {
       }
     })
 
-    // Listen for pre-emptive stream restart (overlap transition - 5 seconds before actual restart)
-    // This gives us time to save pending transcription and wait for final result
-    socketRef.current.on('streamRestartPending', (data: { reason: string, timestamp: number }) => {
-      const displayedText = currentTranscriptionRef.current
-      if (displayedText && displayedText.trim()) {
-
-        // Store pending transcription for potential promotion
-        const pendingId = `pending-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-        pendingTranscriptionRef.current = {
-          id: pendingId,
-          text: displayedText,
-          sourceLanguage: sourceLanguageRef.current,
-          timestamp: Date.now()
-        }
-
-        // Set timeout to promote pending to final if no final result arrives
-        if (pendingPromotionTimeoutRef.current) {
-          clearTimeout(pendingPromotionTimeoutRef.current)
-        }
-        pendingPromotionTimeoutRef.current = setTimeout(() => {
-          const pending = pendingTranscriptionRef.current
-          if (pending && pending.text && pending.text.trim()) {
-
-            const newBubble: MessageBubble = {
-              id: pending.id,
-              text: pending.text,
-              timestamp: new Date(),
-              isComplete: false
-            }
-            setTranscriptionBubbles(prev => [...prev, newBubble])
-
-            // Send to backend for translation
-            if (socketRef.current?.connected) {
-              socketRef.current.emit('speechTranscription', {
-                transcription: pending.text,
-                sourceLanguage: pending.sourceLanguage,
-                bubbleId: pending.id
-              })
-            }
-
-            setCurrentTranscription('')
-
-            setTimeout(() => {
-              setTranscriptionBubbles(prev =>
-                prev.map(bubble =>
-                  bubble.id === pending.id ? { ...bubble, isComplete: true } : bubble
-                )
-              )
-            }, 250)
-
-            pendingTranscriptionRef.current = null
-          }
-        }, 3000) // Wait 3 seconds for final result before promoting
-      }
-    })
-
-    // Listen for stream restart events to save displayed interim text (fallback for error recovery)
-    // This ensures no speech is lost when Google Cloud STT stream restarts
+    // Listen for stream restart events to save displayed interim text (error recovery / language change)
     socketRef.current.on('streamRestart', (data: { reason: string }) => {
-
-      // Clear any pending promotion since we're doing immediate save
-      if (pendingPromotionTimeoutRef.current) {
-        clearTimeout(pendingPromotionTimeoutRef.current)
-        pendingPromotionTimeoutRef.current = null
-      }
-      pendingTranscriptionRef.current = null
-
       const displayedText = currentTranscriptionRef.current
       if (displayedText && displayedText.trim()) {
         // Save the displayed text as a final bubble
@@ -865,13 +798,6 @@ function InputApp() {
         setCurrentTranscription(result.transcript)
       },
       onFinalResult: (result) => {
-        // Clear any pending transcription since we got a real final result
-        if (pendingPromotionTimeoutRef.current) {
-          clearTimeout(pendingPromotionTimeoutRef.current)
-          pendingPromotionTimeoutRef.current = null
-        }
-        pendingTranscriptionRef.current = null
-
         // Don't create empty bubbles
         if (!result.transcript || !result.transcript.trim()) {
           setCurrentTranscription('')

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react'
+import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react'
 import Typography from '../UI/Typography'
 import { Paper, Chip, Button, Box, useMediaQuery, useTheme, CircularProgress, TextField, IconButton, Tooltip, Snackbar, Alert } from '@mui/material'
 import OutputLanguageSelector from '../OutputLanguageSelector'
@@ -68,8 +68,8 @@ const StartButton = styled(Button)`
 const MainContainer = styled.div<{ isMobile: boolean }>`
   display: flex;
   flex-direction: ${props => props.isMobile ? 'column' : 'row'};
-  height: ${props => props.isMobile ? 'calc(100svh - 2rem)' : '100%'};
-  width: ${props => props.isMobile ? 'calc(100vw - 2rem)' : '100%'};
+  height: ${props => props.isMobile ? 'calc(100svh - 2rem)' : '100vh'};
+  width: ${props => props.isMobile ? 'calc(100vw - 2rem)' : '100vw'};
   padding: ${props => props.isMobile ? '0.5rem' : '0'};
   margin: 0;
   gap: ${props => props.isMobile ? '0.5rem' : '8px'};
@@ -111,6 +111,7 @@ const LeftPanel = styled(Paper)`
   display: flex;
   flex-direction: column;
   flex: 1;
+  min-height: 0;
   height: calc(100% - 2rem);
 `
 
@@ -133,6 +134,7 @@ const RightPanel = styled(Paper) <{ isMobile: boolean }>`
   flex-direction: column;
   box-sizing: border-box;
   overflow: hidden;
+  min-height: 0;
 `
 
 const bubbleEnter = keyframes`
@@ -148,7 +150,7 @@ const bubbleEnter = keyframes`
 
 const TypingIndicatorSlot = styled.div<{ $active: boolean }>`
   overflow: hidden;
-  max-height: ${props => (props.$active ? '4rem' : '0')};
+  max-height: ${props => (props.$active ? '80vh' : '0')};
   opacity: ${props => (props.$active ? 1 : 0)};
   transition: max-height 0.35s cubic-bezier(0.22, 1, 0.36, 1),
               opacity 0.3s ease;
@@ -190,12 +192,12 @@ const MessageBubble = styled(Paper) <{ isRTL?: boolean }>`
 
 const BubblesContainer = styled.div`
   display: flex;
-  flex-direction: column-reverse;
+  flex-direction: column;
   overflow-y: auto;
   overflow-x: hidden;
   flex: 1;
+  min-height: 0;
   padding: 1rem 0;
-  gap: 0.5rem;
   box-sizing: border-box;
   
   /* Hide any stray text nodes */
@@ -204,6 +206,14 @@ const BubblesContainer = styled.div`
   & > * {
     font-size: initial;
   }
+`
+
+const BubblesList = styled.div`
+  display: flex;
+  flex-direction: column;
+  margin-top: auto;
+  gap: 0.5rem;
+  width: 100%;
 `
 
 const EmptyState = styled.div`
@@ -237,10 +247,13 @@ const RightPanelContent = styled.div<{ isMobile: boolean }>`
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0;
   padding: ${props => props.isMobile ? '1rem' : '1rem'};
   box-sizing: border-box;
   overflow: hidden;
 `
+
+const SCROLL_THRESHOLD = 48
 
 const BackButton = styled(Button)`
   border-radius: 2rem;
@@ -287,6 +300,41 @@ function TranslationApp() {
   const showLanguageSelectionRef = useRef(true) // Ref to track if user has joined (for socket handlers)
   const processedTranslationsRef = useRef<Set<string>>(new Set()) // Track processed translations for deduplication
   const processedMessageIdsRef = useRef<Set<string>>(new Set()) // Track processed messageIds for idempotent display
+  const bubblesContainerRef = useRef<HTMLDivElement>(null)
+  const bubblesListRef = useRef<HTMLDivElement>(null)
+  const shouldAutoScrollRef = useRef(true)
+
+  const scrollToBottom = useCallback(() => {
+    const el = bubblesContainerRef.current
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+  }, [])
+
+  const handleBubblesScroll = useCallback(() => {
+    const el = bubblesContainerRef.current
+    if (!el) return
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+    shouldAutoScrollRef.current = distanceFromBottom <= SCROLL_THRESHOLD
+  }, [])
+
+  useLayoutEffect(() => {
+    if (shouldAutoScrollRef.current) {
+      scrollToBottom()
+    }
+  }, [translationBubbles, interimText, isSpeakerTyping, scrollToBottom])
+
+  useEffect(() => {
+    const listEl = bubblesListRef.current
+    if (!listEl) return
+
+    const observer = new ResizeObserver(() => {
+      if (shouldAutoScrollRef.current) {
+        scrollToBottom()
+      }
+    })
+    observer.observe(listEl)
+    return () => observer.disconnect()
+  }, [scrollToBottom, translationBubbles.length, isSpeakerTyping])
 
   // Handle target language change and save to cookie
   const handleTargetLanguageChange = (language: GoogleCTLanguageCode) => {
@@ -1242,23 +1290,8 @@ function TranslationApp() {
 
       <RightPanel elevation={3} isMobile={isMobile}>
         <RightPanelContent isMobile={isMobile}>
-          <BubblesContainer>
-            <TypingIndicatorSlot $active={isSpeakerTyping}>
-              <MessageBubble
-                elevation={1}
-                isRTL={isRTLLanguage(targetLanguage)}
-                sx={{ opacity: 0.7, animation: 'none' }}
-              >
-                {interimText ? (
-                  <Typography variant="bodyText" sx={{ fontStyle: 'italic' }}>
-                    {interimText}
-                  </Typography>
-                ) : (
-                  <TypingIndicator visible={true} />
-                )}
-              </MessageBubble>
-            </TypingIndicatorSlot>
-            {translationBubbles.length === 0 ? (
+          <BubblesContainer ref={bubblesContainerRef} onScroll={handleBubblesScroll}>
+            {translationBubbles.length === 0 && !isSpeakerTyping ? (
               <EmptyState>
                 <Typography variant="sectionHeader" sx={{ marginBottom: '0.5rem' }}>
                   Waiting for translation...
@@ -1268,17 +1301,34 @@ function TranslationApp() {
                 </Typography>
               </EmptyState>
             ) : (
-              translationBubbles.slice().reverse().map((bubble) => (
-                <MessageBubble
-                  key={bubble.id}
-                  elevation={3}
-                  isRTL={isRTLLanguage(bubble.targetLanguage)}
-                >
-                  <Typography variant="bodyText">
-                    {bubble.translatedText}
-                  </Typography>
-                </MessageBubble>
-              ))
+              <BubblesList ref={bubblesListRef}>
+                {translationBubbles.map((bubble) => (
+                  <MessageBubble
+                    key={bubble.id}
+                    elevation={3}
+                    isRTL={isRTLLanguage(bubble.targetLanguage)}
+                  >
+                    <Typography variant="bodyText">
+                      {bubble.translatedText}
+                    </Typography>
+                  </MessageBubble>
+                ))}
+                <TypingIndicatorSlot $active={isSpeakerTyping}>
+                  <MessageBubble
+                    elevation={1}
+                    isRTL={isRTLLanguage(targetLanguage)}
+                    sx={{ opacity: 0.7, animation: 'none' }}
+                  >
+                    {interimText ? (
+                      <Typography variant="bodyText" sx={{ fontStyle: 'italic' }}>
+                        {interimText}
+                      </Typography>
+                    ) : (
+                      <TypingIndicator visible={true} />
+                    )}
+                  </MessageBubble>
+                </TypingIndicatorSlot>
+              </BubblesList>
             )}
           </BubblesContainer>
         </RightPanelContent>

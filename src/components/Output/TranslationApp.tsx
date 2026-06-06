@@ -22,6 +22,10 @@ import {
   isValidSessionCodeFormat,
   normalizeSessionCode,
 } from '../../utils/sessionCodeUtils'
+import {
+  clearProactiveReconnectTimer,
+  scheduleProactiveReconnect,
+} from '../../utils/socketReconnect'
 
 const LandingPageContainer = styled.div`
   display: flex;
@@ -695,6 +699,8 @@ function TranslationApp() {
       }, 5000) // Send ping every 5 seconds for aggressive detection
 
         ; (socketRef.current as any).heartbeatInterval = heartbeatInterval
+
+      scheduleProactiveReconnect(socketRef.current)
     })
 
     socketRef.current.on('disconnect', (reason) => {
@@ -708,6 +714,7 @@ function TranslationApp() {
       if ((socketRef.current as any)?.heartbeatInterval) {
         clearInterval((socketRef.current as any).heartbeatInterval)
       }
+      clearProactiveReconnectTimer(socketRef.current)
     })
 
     socketRef.current.on('connect_error', (error: Error) => {
@@ -851,6 +858,8 @@ function TranslationApp() {
         console.log('📬 Requesting missed messages after reconnect')
         socketRef.current?.emit('requestMissedMessages')
       }
+
+      scheduleProactiveReconnect(socketRef.current)
     })
 
     socketRef.current.on('reconnect_error', (error) => {
@@ -889,6 +898,7 @@ function TranslationApp() {
         if ((socketRef.current as any).heartbeatInterval) {
           clearInterval((socketRef.current as any).heartbeatInterval)
         }
+        clearProactiveReconnectTimer(socketRef.current)
         socketRef.current.disconnect()
       }
       setIsConnecting(false)
@@ -985,12 +995,6 @@ function TranslationApp() {
               ? `We couldn't find an active session for "${attemptedSessionCode}".`
               : 'Enter the session code from your speaker to join their live translation session.'}
           </Typography>
-
-          {sessionCodeValidationError && (
-            <Alert severity="warning" sx={{ width: '100%', maxWidth: '300px', borderRadius: '1rem' }}>
-              {sessionCodeValidationError}
-            </Alert>
-          )}
 
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: '1rem', width: '100%', maxWidth: '300px' }}>
             <TextField

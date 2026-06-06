@@ -36,6 +36,10 @@ import {
   queryMicrophonePermission,
 } from '../../utils/microphonePermission'
 import { isSessionCodeAuthError } from '../../utils/sessionCodeUtils'
+import {
+  clearProactiveReconnectTimer,
+  scheduleProactiveReconnect,
+} from '../../utils/socketReconnect'
 
 interface MessageBubble {
   id: string
@@ -343,6 +347,7 @@ function InputApp() {
   const awaitingPongRef = React.useRef<boolean>(false)
   const visibilityHiddenTimeRef = React.useRef<number | null>(null)
   const wasStreamingBeforeDisconnectRef = React.useRef<boolean>(false) // Track streaming state for auto-resume
+  const startRecognitionInternalRef = React.useRef<(() => Promise<void>) | null>(null)
   const isTranslatingRef = React.useRef<boolean>(false) // Ref to track isTranslating for socket handlers
   const { user, tokens, logout, updateTokens, getConnectionInfo } = useAuth()
   const { sessionCode, setSessionCode, clearSessionCode } = useSessionCode()
@@ -407,6 +412,7 @@ function InputApp() {
       if ((socketRef.current as any).heartbeatInterval) {
         clearInterval((socketRef.current as any).heartbeatInterval)
       }
+      clearProactiveReconnectTimer(socketRef.current)
       socketRef.current.disconnect()
       socketRef.current = null
     }
@@ -475,6 +481,8 @@ function InputApp() {
       }, 5000) // Send ping every 5 seconds for aggressive detection
 
         ; (socketRef.current as any).heartbeatInterval = heartbeatInterval
+
+      scheduleProactiveReconnect(socketRef.current)
     })
 
     socketRef.current.on('connectionCount', (data: { total: number, byLanguage: Record<string, number> }) => {
@@ -498,6 +506,7 @@ function InputApp() {
       if ((socketRef.current as any)?.heartbeatInterval) {
         clearInterval((socketRef.current as any).heartbeatInterval)
       }
+      clearProactiveReconnectTimer(socketRef.current)
     })
 
     socketRef.current.on('connect_error', (error: Error) => {
@@ -529,19 +538,32 @@ function InputApp() {
 
         if (wasStreamingBeforeDisconnectRef.current) {
           wasStreamingBeforeDisconnectRef.current = false
-          setShouldBeListening(false)
-          googleSpeechService.stopRecognition()
-          setIsTranslating(false)
-          setAudioLevel(0)
-          setReconnectNotice(
-            'Connection restored — tap Start Recording to continue.'
-          )
+          try {
+            if (startRecognitionInternalRef.current) {
+              await startRecognitionInternalRef.current()
+              setShouldBeListening(true)
+              setReconnectNotice(null)
+            } else {
+              throw new Error('Recognition not ready')
+            }
+          } catch (resumeError) {
+            console.error('❌ Failed to auto-resume after reconnect:', resumeError)
+            setShouldBeListening(false)
+            googleSpeechService.stopRecognition()
+            setIsTranslating(false)
+            setAudioLevel(0)
+            setReconnectNotice(
+              'Connection restored — tap Start Recording to continue.'
+            )
+          }
         }
       } catch (error) {
         console.error('❌ Failed to re-initialize Google Speech Service:', error)
         wasStreamingBeforeDisconnectRef.current = false
         setIsServiceReady(false)
       }
+
+      scheduleProactiveReconnect(socketRef.current)
     })
 
     socketRef.current.on('reconnect_error', (error) => {
@@ -648,6 +670,7 @@ function InputApp() {
         if ((socketRef.current as any).heartbeatInterval) {
           clearInterval((socketRef.current as any).heartbeatInterval)
         }
+        clearProactiveReconnectTimer(socketRef.current)
         socketRef.current.disconnect()
         socketRef.current = null
       }
@@ -837,6 +860,8 @@ function InputApp() {
       }
     })
   }, [sourceLanguage, speechConfig])
+
+  startRecognitionInternalRef.current = startGoogleSpeechRecognitionInternal
 
   // Google Cloud Speech-to-Text handlers
   const startGoogleSpeechRecognition = useCallback(async () => {

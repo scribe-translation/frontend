@@ -38,6 +38,7 @@ import {
 import { isSessionCodeAuthError } from '../../utils/sessionCodeUtils'
 import {
   clearProactiveReconnectTimer,
+  forceTransportReconnect,
   scheduleProactiveReconnect,
 } from '../../utils/socketReconnect'
 
@@ -347,7 +348,13 @@ function InputApp() {
   const awaitingPongRef = React.useRef<boolean>(false)
   const visibilityHiddenTimeRef = React.useRef<number | null>(null)
   const wasStreamingBeforeDisconnectRef = React.useRef<boolean>(false) // Track streaming state for auto-resume
+  const isRecoveringSocketRef = React.useRef<boolean>(false)
+  const hasConnectedOnceRef = React.useRef<boolean>(false)
   const startRecognitionInternalRef = React.useRef<(() => Promise<void>) | null>(null)
+  const resumeRecognitionInternalRef = React.useRef<(() => Promise<void>) | null>(null)
+  const tokensRef = React.useRef<ReturnType<typeof useAuth>['tokens']>(null)
+  const sessionCodeRef = React.useRef<string | null>(null)
+  const connectedSessionCodeRef = React.useRef<string | null>(null)
   const isTranslatingRef = React.useRef<boolean>(false) // Ref to track isTranslating for socket handlers
   const { user, tokens, logout, updateTokens, getConnectionInfo } = useAuth()
   const { sessionCode, setSessionCode, clearSessionCode } = useSessionCode()
@@ -356,6 +363,9 @@ function InputApp() {
 
   // Prevent screen from dimming while using the app
   useWakeLock(true)
+
+  tokensRef.current = tokens
+  sessionCodeRef.current = sessionCode
 
   // Keep refs in sync with state for use in socket handlers (avoid stale closures)
   useEffect(() => {
@@ -394,14 +404,26 @@ function InputApp() {
   }, [tokens, sessionCode, getConnectionInfo])
 
   useEffect(() => {
-    if (!tokens || !sessionCode) {
+    if (!tokens?.accessToken || !sessionCode) {
       setIsSocketConnecting(false)
       setIsSocketConnected(false)
       return
     }
 
+    if (
+      socketRef.current &&
+      connectedSessionCodeRef.current === sessionCode
+    ) {
+      socketRef.current.auth = {
+        token: tokens.accessToken,
+        sessionCode,
+      }
+      return
+    }
+
     setIsSocketConnecting(true)
     setIsSocketConnected(false)
+    connectedSessionCodeRef.current = sessionCode
 
     if (socketRef.current) {
       // Remove all event listeners before disconnecting
@@ -417,27 +439,18 @@ function InputApp() {
       socketRef.current = null
     }
 
-    socketRef.current = io(CONFIG.BACKEND_URL, {
-      auth: {
-        token: tokens.accessToken,
-        sessionCode: sessionCode
-      },
-      reconnection: true,
-      reconnectionAttempts: 10,
-      reconnectionDelay: 1000,
-      timeout: 20000
+    const getSocketAuth = () => ({
+      token: tokensRef.current?.accessToken,
+      sessionCode: sessionCodeRef.current,
     })
 
-    socketRef.current.on('connect', () => {
-      setIsSocketConnecting(false)
-      setIsSocketConnected(true)
-      setConnectionQuality('good')
-      socketRef.current?.emit('getConnectionCount')
-
-      // Reset connection health tracking
-      lastPongTimeRef.current = Date.now()
-      missedPongCountRef.current = 0
-      awaitingPongRef.current = false
+    const setupSocketMonitoring = () => {
+      if ((socketRef.current as any)?.connectionCountInterval) {
+        clearInterval((socketRef.current as any).connectionCountInterval)
+      }
+      if ((socketRef.current as any)?.heartbeatInterval) {
+        clearInterval((socketRef.current as any).heartbeatInterval)
+      }
 
       const intervalId = setInterval(() => {
         if (socketRef.current?.connected) {
@@ -446,43 +459,95 @@ function InputApp() {
           clearInterval(intervalId)
         }
       }, 5000)
+      ;(socketRef.current as any).connectionCountInterval = intervalId
 
-        ; (socketRef.current as any).connectionCountInterval = intervalId
-
-      // Aggressive heartbeat mechanism - ping every 5 seconds for faster detection
       const heartbeatInterval = setInterval(() => {
         if (socketRef.current?.connected) {
-          // Check if previous pong was received
           if (awaitingPongRef.current) {
             missedPongCountRef.current++
             console.warn(`⚠️ Missed pong #${missedPongCountRef.current}`)
 
-            // 2 missed pongs (10s) = unstable connection
             if (missedPongCountRef.current >= 2) {
               setConnectionQuality('unstable')
             }
 
-            // 3 missed pongs (15s) = force reconnection before server timeout
             if (missedPongCountRef.current >= 3) {
               console.error('❌ Connection appears dead (3 missed pongs), forcing reconnection...')
               setConnectionQuality('disconnected')
-              // Force disconnect to trigger reconnection
-              socketRef.current?.disconnect()
+              forceTransportReconnect(socketRef.current)
               return
             }
           }
 
-          // Send ping and mark as awaiting pong
           awaitingPongRef.current = true
           socketRef.current.emit('ping')
         } else {
           clearInterval(heartbeatInterval)
         }
-      }, 5000) // Send ping every 5 seconds for aggressive detection
+      }, 5000)
+      ;(socketRef.current as any).heartbeatInterval = heartbeatInterval
+    }
 
-        ; (socketRef.current as any).heartbeatInterval = heartbeatInterval
+    const recoverSocketSession = async () => {
+      if (!wasStreamingBeforeDisconnectRef.current || isRecoveringSocketRef.current) {
+        return
+      }
 
-      scheduleProactiveReconnect(socketRef.current)
+      isRecoveringSocketRef.current = true
+      wasStreamingBeforeDisconnectRef.current = false
+
+      console.log('🔄 Recovering speaker session after reconnect')
+      try {
+        await googleSpeechService.initialize(socketRef.current)
+        setIsServiceReady(googleSpeechService.isSocketReady())
+
+        if (resumeRecognitionInternalRef.current) {
+          await resumeRecognitionInternalRef.current()
+          setShouldBeListening(true)
+          setReconnectNotice(null)
+        } else {
+          throw new Error('Recognition not ready')
+        }
+      } catch (resumeError) {
+        console.error('❌ Failed to auto-resume after reconnect:', resumeError)
+        setShouldBeListening(false)
+        googleSpeechService.stopRecognition()
+        setIsTranslating(false)
+        setAudioLevel(0)
+        setReconnectNotice(
+          'Connection restored — tap Start Recording to continue.'
+        )
+      } finally {
+        isRecoveringSocketRef.current = false
+      }
+    }
+
+    socketRef.current = io(CONFIG.BACKEND_URL, {
+      auth: getSocketAuth(),
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 20000
+    })
+
+    socketRef.current.on('connect', async () => {
+      setIsSocketConnecting(false)
+      setIsSocketConnected(true)
+      setConnectionQuality('good')
+      socketRef.current?.emit('getConnectionCount')
+
+      lastPongTimeRef.current = Date.now()
+      missedPongCountRef.current = 0
+      awaitingPongRef.current = false
+
+      if (hasConnectedOnceRef.current) {
+        await recoverSocketSession()
+      }
+      hasConnectedOnceRef.current = true
+
+      setupSocketMonitoring()
+      scheduleProactiveReconnect(socketRef.current, getSocketAuth)
     })
 
     socketRef.current.on('connectionCount', (data: { total: number, byLanguage: Record<string, number> }) => {
@@ -521,49 +586,8 @@ function InputApp() {
       }
     })
 
-    socketRef.current.on('reconnect', async (attemptNumber) => {
-      console.log(`🔄 InputApp reconnected after ${attemptNumber} attempts, wasStreaming: ${wasStreamingBeforeDisconnectRef.current}`)
-      setIsSocketConnecting(false)
-      setIsSocketConnected(true)
-      setConnectionQuality('good')
-
-      // Reset connection health tracking
-      lastPongTimeRef.current = Date.now()
-      missedPongCountRef.current = 0
-      awaitingPongRef.current = false
-
-      try {
-        await googleSpeechService.initialize(socketRef.current)
-        setIsServiceReady(googleSpeechService.isSocketReady())
-
-        if (wasStreamingBeforeDisconnectRef.current) {
-          wasStreamingBeforeDisconnectRef.current = false
-          try {
-            if (startRecognitionInternalRef.current) {
-              await startRecognitionInternalRef.current()
-              setShouldBeListening(true)
-              setReconnectNotice(null)
-            } else {
-              throw new Error('Recognition not ready')
-            }
-          } catch (resumeError) {
-            console.error('❌ Failed to auto-resume after reconnect:', resumeError)
-            setShouldBeListening(false)
-            googleSpeechService.stopRecognition()
-            setIsTranslating(false)
-            setAudioLevel(0)
-            setReconnectNotice(
-              'Connection restored — tap Start Recording to continue.'
-            )
-          }
-        }
-      } catch (error) {
-        console.error('❌ Failed to re-initialize Google Speech Service:', error)
-        wasStreamingBeforeDisconnectRef.current = false
-        setIsServiceReady(false)
-      }
-
-      scheduleProactiveReconnect(socketRef.current)
+    socketRef.current.on('reconnect', (attemptNumber) => {
+      console.log(`🔄 InputApp reconnected after ${attemptNumber} attempts`)
     })
 
     socketRef.current.on('reconnect_error', (error) => {
@@ -591,6 +615,12 @@ function InputApp() {
     })
 
     socketRef.current.on('tokenRefreshed', (data) => {
+      if (socketRef.current) {
+        socketRef.current.auth = {
+          token: data.accessToken,
+          sessionCode: sessionCodeRef.current,
+        }
+      }
       if (updateTokens) {
         updateTokens({
           accessToken: data.accessToken,
@@ -663,6 +693,8 @@ function InputApp() {
     })
 
     return () => {
+      hasConnectedOnceRef.current = false
+      connectedSessionCodeRef.current = null
       if (socketRef.current) {
         if ((socketRef.current as any).connectionCountInterval) {
           clearInterval((socketRef.current as any).connectionCountInterval)
@@ -677,7 +709,7 @@ function InputApp() {
       setIsSocketConnecting(false)
       setIsSocketConnected(false)
     }
-  }, [tokens, sessionCode])
+  }, [tokens?.accessToken, sessionCode])
 
   // Visibility change handler - verify connection when app returns from background
   useEffect(() => {
@@ -719,7 +751,7 @@ function InputApp() {
             if (awaitingPongRef.current && socketRef.current) {
               console.error('❌ No pong after foregrounding, forcing reconnection...')
               setConnectionQuality('disconnected')
-              socketRef.current.disconnect()
+              forceTransportReconnect(socketRef.current)
             }
           }, 3000)
 
@@ -799,35 +831,29 @@ function InputApp() {
     }
   }, [])
 
-  // Google Cloud Speech-to-Text recognition
-  const startGoogleSpeechRecognitionInternal = useCallback(async () => {
-    // Update Google Speech Service configuration
-    googleSpeechService.updateConfig({
-      languageCode: sourceLanguage,
-      speechStartTimeout: speechConfig.speechStartTimeout,
-      maxWordsPerBubble: speechConfig.maxWordsPerBubble
-    })
-
-    await googleSpeechService.startRecognition({
+  const speechRecognitionCallbacks = React.useMemo(
+    () => ({
       onStart: () => {
         setIsTranslating(true)
         setErrorMessage(null)
       },
       onEnd: () => {
         setIsTranslating(false)
-        setAudioLevel(0) // Reset audio level when recording ends
+        setAudioLevel(0)
       },
-      onInterimResult: (result) => {
+      onInterimResult: (result: { transcript: string }) => {
         setCurrentTranscription(result.transcript)
       },
-      onFinalResult: (result) => {
-        // Don't create empty bubbles
+      onFinalResult: (result: {
+        transcript: string
+        bubbleId: string
+      }) => {
         if (!result.transcript || !result.transcript.trim()) {
           setCurrentTranscription('')
           return
         }
 
-        const uniqueId = `${result.bubbleId}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const uniqueId = `${result.bubbleId}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
         const newBubble: MessageBubble = {
           id: uniqueId,
           text: result.transcript,
@@ -851,17 +877,40 @@ function InputApp() {
           )
         }, 250)
       },
-      onError: (error) => {
+      onError: (error: Error) => {
         console.error('❌ Google Speech recognition error:', error)
         setIsTranslating(false)
       },
-      onAudioLevel: (level) => {
+      onAudioLevel: (level: number) => {
         setAudioLevel(level)
       }
+    }),
+    []
+  )
+
+  // Google Cloud Speech-to-Text recognition
+  const startGoogleSpeechRecognitionInternal = useCallback(async () => {
+    googleSpeechService.updateConfig({
+      languageCode: sourceLanguage,
+      speechStartTimeout: speechConfig.speechStartTimeout,
+      maxWordsPerBubble: speechConfig.maxWordsPerBubble
     })
-  }, [sourceLanguage, speechConfig])
+
+    await googleSpeechService.startRecognition(speechRecognitionCallbacks)
+  }, [sourceLanguage, speechConfig, speechRecognitionCallbacks])
+
+  const resumeGoogleSpeechRecognitionInternal = useCallback(async () => {
+    googleSpeechService.updateConfig({
+      languageCode: sourceLanguage,
+      speechStartTimeout: speechConfig.speechStartTimeout,
+      maxWordsPerBubble: speechConfig.maxWordsPerBubble
+    })
+
+    await googleSpeechService.resumeRecognitionAfterReconnect(speechRecognitionCallbacks)
+  }, [sourceLanguage, speechConfig, speechRecognitionCallbacks])
 
   startRecognitionInternalRef.current = startGoogleSpeechRecognitionInternal
+  resumeRecognitionInternalRef.current = resumeGoogleSpeechRecognitionInternal
 
   // Google Cloud Speech-to-Text handlers
   const startGoogleSpeechRecognition = useCallback(async () => {

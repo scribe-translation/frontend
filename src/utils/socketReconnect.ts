@@ -7,15 +7,32 @@ import type { Socket } from 'socket.io-client'
 export const PROACTIVE_RECONNECT_MS = 8 * 60 * 1000
 
 const reconnectTimerKey = 'proactiveReconnectTimer'
+const refreshingKey = 'socketRefreshInProgress'
+const lastRefreshKey = 'socketLastRefreshAt'
+
+/** Prevent refresh storms if something else is also trying to reconnect. */
+const MIN_REFRESH_INTERVAL_MS = 30_000
+
+export type SocketAuthProvider = () => Record<string, unknown>
+
+type SocketMeta = Socket & {
+  [reconnectTimerKey]?: ReturnType<typeof setTimeout>
+  [refreshingKey]?: boolean
+  [lastRefreshKey]?: number
+}
+
+function asMeta(socket: Socket | null): SocketMeta | null {
+  return socket as SocketMeta | null
+}
 
 export type SocketAuthProvider = () => Record<string, unknown>
 
 export function clearProactiveReconnectTimer(socket: Socket | null): void {
-  if (!socket) return
-  const timer = (socket as { [reconnectTimerKey]?: ReturnType<typeof setTimeout> })[reconnectTimerKey]
-  if (timer) {
-    clearTimeout(timer)
-    ;(socket as { [reconnectTimerKey]?: ReturnType<typeof setTimeout> })[reconnectTimerKey] = undefined
+  const meta = asMeta(socket)
+  if (!meta) return
+  if (meta[reconnectTimerKey]) {
+    clearTimeout(meta[reconnectTimerKey])
+    meta[reconnectTimerKey] = undefined
   }
 }
 
@@ -43,5 +60,13 @@ export function scheduleProactiveReconnect(
   const timer = setTimeout(() => {
     refreshSocketConnection(socket, getAuth)
   }, PROACTIVE_RECONNECT_MS)
-  ;(socket as { [reconnectTimerKey]?: ReturnType<typeof setTimeout> })[reconnectTimerKey] = timer
+}
+
+/** Force a single clean reconnect via transport close (keeps auto-reconnect enabled). */
+export function forceTransportReconnect(socket: Socket | null): void {
+  if (!socket?.connected) return
+  const engine = socket.io.engine
+  if (engine) {
+    engine.close()
+  }
 }

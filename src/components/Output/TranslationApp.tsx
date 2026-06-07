@@ -24,6 +24,7 @@ import {
 } from '../../utils/sessionCodeUtils'
 import {
   clearProactiveReconnectTimer,
+  forceTransportReconnect,
   scheduleProactiveReconnect,
 } from '../../utils/socketReconnect'
 
@@ -684,38 +685,46 @@ function TranslationApp() {
       restoreListenerSession(hasConnectedOnceRef.current ? 'reconnect' : 'connect')
       hasConnectedOnceRef.current = true
 
-      // Aggressive heartbeat mechanism - ping every 5 seconds for faster detection
       const heartbeatInterval = setInterval(() => {
         if (socketRef.current?.connected) {
-          // Check if previous pong was received
           if (awaitingPongRef.current) {
             missedPongCountRef.current++
             console.warn(`⚠️ Missed pong #${missedPongCountRef.current}`)
 
-            // 2 missed pongs (10s) = unstable connection
             if (missedPongCountRef.current >= 2) {
               setConnectionQuality('unstable')
             }
 
-            // 3 missed pongs (15s) = force reconnection before server timeout
             if (missedPongCountRef.current >= 3) {
               console.error('❌ Connection appears dead (3 missed pongs), forcing reconnection...')
               setConnectionQuality('disconnected')
-              // Force disconnect to trigger reconnection
-              socketRef.current?.disconnect()
+              forceTransportReconnect(socketRef.current)
               return
             }
           }
 
-          // Send ping and mark as awaiting pong
           awaitingPongRef.current = true
           socketRef.current.emit('ping')
         } else {
           clearInterval(heartbeatInterval)
         }
-      }, 5000) // Send ping every 5 seconds for aggressive detection
+      }, 5000)
+      ;(socketRef.current as any).heartbeatInterval = heartbeatInterval
+    }
 
-        ; (socketRef.current as any).heartbeatInterval = heartbeatInterval
+    socketRef.current = io(CONFIG.BACKEND_URL, {
+      auth: getSocketAuth(),
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 20000
+    })
+
+    socketRef.current.on('connect', () => {
+      setIsConnecting(false)
+      setIsConnected(true)
+      setConnectionQuality('good')
 
       scheduleProactiveReconnect(socketRef.current, getSocketAuth)
     })
@@ -934,7 +943,7 @@ function TranslationApp() {
             if (awaitingPongRef.current && socketRef.current) {
               console.error('❌ No pong after foregrounding, forcing reconnection...')
               setConnectionQuality('disconnected')
-              socketRef.current.disconnect()
+              forceTransportReconnect(socketRef.current)
             }
           }, 3000)
 

@@ -25,6 +25,8 @@ function asMeta(socket: Socket | null): SocketMeta | null {
   return socket as SocketMeta | null
 }
 
+export type SocketAuthProvider = () => Record<string, unknown>
+
 export function clearProactiveReconnectTimer(socket: Socket | null): void {
   const meta = asMeta(socket)
   if (!meta) return
@@ -38,44 +40,25 @@ export function refreshSocketConnection(
   socket: Socket | null,
   getAuth?: SocketAuthProvider
 ): void {
-  const meta = asMeta(socket)
-  if (!meta?.connected) return
-
-  const now = Date.now()
-  const lastRefresh = meta[lastRefreshKey] ?? 0
-  if (now - lastRefresh < MIN_REFRESH_INTERVAL_MS) {
-    console.warn('⏭️ Skipping proactive refresh — last refresh was too recent')
-    return
-  }
-  if (meta[refreshingKey]) {
-    return
-  }
-
-  meta[refreshingKey] = true
-  meta[lastRefreshKey] = now
+  if (!socket?.connected) return
 
   if (getAuth) {
-    meta.auth = getAuth()
+    socket.auth = getAuth()
   }
 
   console.log('🔄 Proactive reconnect before platform timeout')
-
-  meta.once('disconnect', () => {
-    meta[refreshingKey] = false
-    meta.connect()
-  })
-  meta.disconnect()
+  socket.disconnect()
+  socket.connect()
 }
 
 export function scheduleProactiveReconnect(
   socket: Socket | null,
   getAuth?: SocketAuthProvider
 ): void {
-  const meta = asMeta(socket)
-  if (!meta) return
-  clearProactiveReconnectTimer(meta)
-  meta[reconnectTimerKey] = setTimeout(() => {
-    refreshSocketConnection(meta, getAuth)
+  if (!socket) return
+  clearProactiveReconnectTimer(socket)
+  const timer = setTimeout(() => {
+    refreshSocketConnection(socket, getAuth)
   }, PROACTIVE_RECONNECT_MS)
 }
 

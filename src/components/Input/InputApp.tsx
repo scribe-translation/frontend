@@ -444,13 +444,59 @@ function InputApp() {
       sessionCode: sessionCodeRef.current,
     })
 
-    const setupSocketMonitoring = () => {
-      if ((socketRef.current as any)?.connectionCountInterval) {
-        clearInterval((socketRef.current as any).connectionCountInterval)
+    const recoverSocketSession = async (source: 'connect' | 'reconnect') => {
+      if (!wasStreamingBeforeDisconnectRef.current || isRecoveringSocketRef.current) {
+        return
       }
-      if ((socketRef.current as any)?.heartbeatInterval) {
-        clearInterval((socketRef.current as any).heartbeatInterval)
+
+      isRecoveringSocketRef.current = true
+      wasStreamingBeforeDisconnectRef.current = false
+
+      console.log(`🔄 Recovering speaker session after ${source}`)
+      try {
+        await googleSpeechService.initialize(socketRef.current)
+        setIsServiceReady(googleSpeechService.isSocketReady())
+
+        if (resumeRecognitionInternalRef.current) {
+          await resumeRecognitionInternalRef.current()
+          setShouldBeListening(true)
+          setReconnectNotice(null)
+        } else {
+          throw new Error('Recognition not ready')
+        }
+      } catch (resumeError) {
+        console.error('❌ Failed to auto-resume after reconnect:', resumeError)
+        setShouldBeListening(false)
+        googleSpeechService.stopRecognition()
+        setIsTranslating(false)
+        setAudioLevel(0)
+        setReconnectNotice(
+          'Connection restored — tap Start Recording to continue.'
+        )
+      } finally {
+        isRecoveringSocketRef.current = false
       }
+    }
+
+    socketRef.current = io(CONFIG.BACKEND_URL, {
+      auth: getSocketAuth(),
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 20000
+    })
+
+    socketRef.current.on('connect', async () => {
+      setIsSocketConnecting(false)
+      setIsSocketConnected(true)
+      setConnectionQuality('good')
+      socketRef.current?.emit('getConnectionCount')
+
+      // Reset connection health tracking
+      lastPongTimeRef.current = Date.now()
+      missedPongCountRef.current = 0
+      awaitingPongRef.current = false
 
       const intervalId = setInterval(() => {
         if (socketRef.current?.connected) {
@@ -522,32 +568,12 @@ function InputApp() {
       }
     }
 
-    socketRef.current = io(CONFIG.BACKEND_URL, {
-      auth: getSocketAuth(),
-      reconnection: true,
-      reconnectionAttempts: Infinity,
-      reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000,
-      timeout: 20000
-    })
-
-    socketRef.current.on('connect', async () => {
-      setIsSocketConnecting(false)
-      setIsSocketConnected(true)
-      setConnectionQuality('good')
-      socketRef.current?.emit('getConnectionCount')
-
-      lastPongTimeRef.current = Date.now()
-      missedPongCountRef.current = 0
-      awaitingPongRef.current = false
+      scheduleProactiveReconnect(socketRef.current, getSocketAuth)
 
       if (hasConnectedOnceRef.current) {
-        await recoverSocketSession()
+        await recoverSocketSession('connect')
       }
       hasConnectedOnceRef.current = true
-
-      setupSocketMonitoring()
-      scheduleProactiveReconnect(socketRef.current, getSocketAuth)
     })
 
     socketRef.current.on('connectionCount', (data: { total: number, byLanguage: Record<string, number> }) => {
@@ -586,8 +612,26 @@ function InputApp() {
       }
     })
 
-    socketRef.current.on('reconnect', (attemptNumber) => {
-      console.log(`🔄 InputApp reconnected after ${attemptNumber} attempts`)
+    socketRef.current.on('reconnect', async (attemptNumber) => {
+      console.log(`🔄 InputApp reconnected after ${attemptNumber} attempts, wasStreaming: ${wasStreamingBeforeDisconnectRef.current}`)
+      setIsSocketConnecting(false)
+      setIsSocketConnected(true)
+      setConnectionQuality('good')
+
+      // Reset connection health tracking
+      lastPongTimeRef.current = Date.now()
+      missedPongCountRef.current = 0
+      awaitingPongRef.current = false
+
+      try {
+        await recoverSocketSession('reconnect')
+      } catch (error) {
+        console.error('❌ Failed to re-initialize Google Speech Service:', error)
+        wasStreamingBeforeDisconnectRef.current = false
+        setIsServiceReady(false)
+      }
+
+      scheduleProactiveReconnect(socketRef.current, getSocketAuth)
     })
 
     socketRef.current.on('reconnect_error', (error) => {
@@ -694,7 +738,6 @@ function InputApp() {
 
     return () => {
       hasConnectedOnceRef.current = false
-      connectedSessionCodeRef.current = null
       if (socketRef.current) {
         if ((socketRef.current as any).connectionCountInterval) {
           clearInterval((socketRef.current as any).connectionCountInterval)

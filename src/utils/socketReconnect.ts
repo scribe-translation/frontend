@@ -4,7 +4,7 @@ import type { Socket } from 'socket.io-client'
  * Reconnect before Cloud Run request timeout (600s default).
  * Use 8 minutes to stay safely under the platform cutoff even if deploy config lags.
  */
-export const PROACTIVE_RECONNECT_MS = 8 * 60 * 1000
+export const PROACTIVE_RECONNECT_MS = 59 * 60 * 1000
 
 const reconnectTimerKey = 'proactiveReconnectTimer'
 const refreshingKey = 'socketRefreshInProgress'

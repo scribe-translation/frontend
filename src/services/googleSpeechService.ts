@@ -98,14 +98,7 @@ class GoogleSpeechService {
     }
 
     if (socketChanged) {
-      this.isRecording = false;
-      this.isPaused = false;
-      this.stopKeepAlive();
-      this.stopAudioLevelMonitoring();
-      if (this.scriptProcessor) {
-        this.scriptProcessor.disconnect();
-        this.scriptProcessor = null;
-      }
+      this.teardownAudioCaptureForReconnect();
     }
 
     if (this.socket) {
@@ -533,6 +526,98 @@ class GoogleSpeechService {
       // Stop streaming on error
       this.socket.emit('stopStreaming');
       this.callbacks?.onError(new Error('Failed to start speech recognition'));
+    }
+  }
+
+  /**
+   * Tear down audio capture when the socket reconnects with a new id.
+   * Keeps microphone + callbacks so the caller can restart recognition.
+   */
+  private teardownAudioCaptureForReconnect(): void {
+    if (!this.isRecording && !this.scriptProcessor) {
+      return;
+    }
+
+    this.isRecording = false;
+    this.isPaused = false;
+    this.clearTimers();
+    this.stopAudioLevelMonitoring();
+    this.stopSilenceDetection();
+    this.stopStreamHealthCheck();
+    this.stopKeepAlive();
+
+    if (this.scriptProcessor) {
+      this.scriptProcessor.disconnect();
+      this.scriptProcessor = null;
+    }
+  }
+
+  /**
+   * Resume audio capture after a socket reconnect without resetting the in-progress bubble.
+   */
+  async resumeRecognitionAfterReconnect(
+    callbacks: SpeechRecognitionCallbacks
+  ): Promise<void> {
+    if (this.isRecording) {
+      return;
+    }
+
+    if (!this.socket) {
+      throw new Error('Service not initialized. Call initialize() first.');
+    }
+
+    if (!this.isMicrophoneReady()) {
+      throw new Error('Microphone not ready. Call ensureMicrophone() first.');
+    }
+
+    await this.resumeAudioContext();
+
+    this.callbacks = callbacks;
+    this.isRecording = true;
+    this.isPaused = false;
+    this.hasReceivedFinalResult = false;
+    this.lastInterimResultTime = Date.now();
+
+    try {
+      const bufferSize = 4096;
+      this.scriptProcessor = this.audioContext!.createScriptProcessor(bufferSize, 1, 1);
+
+      if (this.gainNode) {
+        this.gainNode.connect(this.scriptProcessor);
+      } else {
+        this.microphone!.connect(this.scriptProcessor);
+      }
+      this.scriptProcessor.connect(this.audioContext!.destination);
+
+      this.scriptProcessor.onaudioprocess = (event) => {
+        if (this.isRecording && !this.isPaused) {
+          const inputData = event.inputBuffer.getChannelData(0);
+          const audioLevel = this.calculateAudioLevel(inputData);
+
+          if (audioLevel > 0.02) {
+            this.lastSpeechTime = Date.now();
+            this.silenceStartTime = null;
+          } else if (this.silenceStartTime === null) {
+            this.silenceStartTime = Date.now();
+          }
+
+          this.processRawAudioChunk(this.convertFloat32ToInt16(inputData));
+        }
+      };
+
+      this.startAudioLevelMonitoring();
+      this.startSilenceDetection();
+      this.startStreamHealthCheck();
+      this.startKeepAlive();
+      this.lastAudioSentTime = Date.now();
+      this.lastSpeechTime = Date.now();
+    } catch (error) {
+      console.error('❌ Failed to resume speech recognition:', error);
+      this.isRecording = false;
+      this.callbacks?.onError(
+        new Error('Failed to resume speech recognition after reconnect')
+      );
+      throw error;
     }
   }
 

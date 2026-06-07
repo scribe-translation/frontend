@@ -506,6 +506,10 @@ function TranslationApp() {
   const missedPongCountRef = useRef<number>(0)
   const awaitingPongRef = useRef<boolean>(false)
   const visibilityHiddenTimeRef = useRef<number | null>(null)
+  const hasConnectedOnceRef = useRef(false)
+  const sessionCodeRef = useRef(sessionCode)
+
+  sessionCodeRef.current = sessionCode
 
   // Keep ref in sync with state for socket handlers
   useEffect(() => {
@@ -638,13 +642,32 @@ function TranslationApp() {
     setIsConnecting(true)
     setIsConnected(false)
 
+    const getSocketAuth = () => ({
+      sessionCode: sessionCodeRef.current,
+    })
+
+    const restoreListenerSession = (source: 'connect' | 'reconnect') => {
+      const currentTargetLanguage = targetLanguageRef.current
+      const isOnLandingPage = showLanguageSelectionRef.current
+      if (!currentTargetLanguage || isOnLandingPage) {
+        return
+      }
+
+      console.log(`🔗 Re-establishing target language after ${source}: ${currentTargetLanguage}`)
+      socketRef.current?.emit('setTargetLanguage', { targetLanguage: currentTargetLanguage })
+
+      if (source === 'reconnect' || hasConnectedOnceRef.current) {
+        console.log('📬 Requesting missed messages after reconnect')
+        socketRef.current?.emit('requestMissedMessages')
+      }
+    }
+
     socketRef.current = io(CONFIG.BACKEND_URL, {
-      auth: {
-        sessionCode: sessionCode
-      },
+      auth: getSocketAuth(),
       reconnection: true,
-      reconnectionAttempts: 10,
+      reconnectionAttempts: Infinity,
       reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
       timeout: 20000
     })
 
@@ -658,14 +681,8 @@ function TranslationApp() {
       missedPongCountRef.current = 0
       awaitingPongRef.current = false
 
-      // Only re-establish target language if user has already joined (not on landing page)
-      // Use refs to avoid stale closure issues
-      const currentTargetLanguage = targetLanguageRef.current
-      const isOnLandingPage = showLanguageSelectionRef.current
-      if (currentTargetLanguage && !isOnLandingPage) {
-        console.log(`🔗 Re-establishing target language: ${currentTargetLanguage}`)
-        socketRef.current?.emit('setTargetLanguage', { targetLanguage: currentTargetLanguage })
-      }
+      restoreListenerSession(hasConnectedOnceRef.current ? 'reconnect' : 'connect')
+      hasConnectedOnceRef.current = true
 
       // Aggressive heartbeat mechanism - ping every 5 seconds for faster detection
       const heartbeatInterval = setInterval(() => {
@@ -700,15 +717,13 @@ function TranslationApp() {
 
         ; (socketRef.current as any).heartbeatInterval = heartbeatInterval
 
-      scheduleProactiveReconnect(socketRef.current)
+      scheduleProactiveReconnect(socketRef.current, getSocketAuth)
     })
 
     socketRef.current.on('disconnect', (reason) => {
       console.log(`🔌 TranslationApp disconnected: ${reason}`)
       setIsConnecting(false)
       setIsConnected(false)
-      setIsSpeakerTyping(false)
-      setInterimText(null)
 
       // Clear heartbeat interval
       if ((socketRef.current as any)?.heartbeatInterval) {
@@ -843,23 +858,9 @@ function TranslationApp() {
       console.log(`🔄 TranslationApp reconnected after ${attemptNumber} attempts`)
       setIsConnecting(false)
       setIsConnected(true)
-      setIsSpeakerTyping(false)
-      setInterimText(null)
 
-      // Only re-establish target language if user has already joined (not on landing page)
-      // Use refs to avoid stale closure issues
-      const currentTargetLanguage = targetLanguageRef.current
-      const isOnLandingPage = showLanguageSelectionRef.current
-      if (currentTargetLanguage && !isOnLandingPage) {
-        console.log(`🔗 Re-establishing target language after reconnect: ${currentTargetLanguage}`)
-        socketRef.current?.emit('setTargetLanguage', { targetLanguage: currentTargetLanguage })
-
-        // Request any missed messages that were sent during disconnection
-        console.log('📬 Requesting missed messages after reconnect')
-        socketRef.current?.emit('requestMissedMessages')
-      }
-
-      scheduleProactiveReconnect(socketRef.current)
+      restoreListenerSession('reconnect')
+      scheduleProactiveReconnect(socketRef.current, getSocketAuth)
     })
 
     socketRef.current.on('reconnect_error', (error) => {
@@ -894,6 +895,7 @@ function TranslationApp() {
     })
 
     return () => {
+      hasConnectedOnceRef.current = false
       if (socketRef.current) {
         if ((socketRef.current as any).heartbeatInterval) {
           clearInterval((socketRef.current as any).heartbeatInterval)

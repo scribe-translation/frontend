@@ -347,7 +347,12 @@ function InputApp() {
   const awaitingPongRef = React.useRef<boolean>(false)
   const visibilityHiddenTimeRef = React.useRef<number | null>(null)
   const wasStreamingBeforeDisconnectRef = React.useRef<boolean>(false) // Track streaming state for auto-resume
+  const isRecoveringSocketRef = React.useRef<boolean>(false)
+  const hasConnectedOnceRef = React.useRef<boolean>(false)
   const startRecognitionInternalRef = React.useRef<(() => Promise<void>) | null>(null)
+  const resumeRecognitionInternalRef = React.useRef<(() => Promise<void>) | null>(null)
+  const tokensRef = React.useRef<ReturnType<typeof useAuth>['tokens']>(null)
+  const sessionCodeRef = React.useRef<string | null>(null)
   const isTranslatingRef = React.useRef<boolean>(false) // Ref to track isTranslating for socket handlers
   const { user, tokens, logout, updateTokens, getConnectionInfo } = useAuth()
   const { sessionCode, setSessionCode, clearSessionCode } = useSessionCode()
@@ -356,6 +361,9 @@ function InputApp() {
 
   // Prevent screen from dimming while using the app
   useWakeLock(true)
+
+  tokensRef.current = tokens
+  sessionCodeRef.current = sessionCode
 
   // Keep refs in sync with state for use in socket handlers (avoid stale closures)
   useEffect(() => {
@@ -417,18 +425,55 @@ function InputApp() {
       socketRef.current = null
     }
 
+    const getSocketAuth = () => ({
+      token: tokensRef.current?.accessToken,
+      sessionCode: sessionCodeRef.current,
+    })
+
+    const recoverSocketSession = async (source: 'connect' | 'reconnect') => {
+      if (!wasStreamingBeforeDisconnectRef.current || isRecoveringSocketRef.current) {
+        return
+      }
+
+      isRecoveringSocketRef.current = true
+      wasStreamingBeforeDisconnectRef.current = false
+
+      console.log(`🔄 Recovering speaker session after ${source}`)
+      try {
+        await googleSpeechService.initialize(socketRef.current)
+        setIsServiceReady(googleSpeechService.isSocketReady())
+
+        if (resumeRecognitionInternalRef.current) {
+          await resumeRecognitionInternalRef.current()
+          setShouldBeListening(true)
+          setReconnectNotice(null)
+        } else {
+          throw new Error('Recognition not ready')
+        }
+      } catch (resumeError) {
+        console.error('❌ Failed to auto-resume after reconnect:', resumeError)
+        setShouldBeListening(false)
+        googleSpeechService.stopRecognition()
+        setIsTranslating(false)
+        setAudioLevel(0)
+        setReconnectNotice(
+          'Connection restored — tap Start Recording to continue.'
+        )
+      } finally {
+        isRecoveringSocketRef.current = false
+      }
+    }
+
     socketRef.current = io(CONFIG.BACKEND_URL, {
-      auth: {
-        token: tokens.accessToken,
-        sessionCode: sessionCode
-      },
+      auth: getSocketAuth(),
       reconnection: true,
-      reconnectionAttempts: 10,
+      reconnectionAttempts: Infinity,
       reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
       timeout: 20000
     })
 
-    socketRef.current.on('connect', () => {
+    socketRef.current.on('connect', async () => {
       setIsSocketConnecting(false)
       setIsSocketConnected(true)
       setConnectionQuality('good')
@@ -482,7 +527,12 @@ function InputApp() {
 
         ; (socketRef.current as any).heartbeatInterval = heartbeatInterval
 
-      scheduleProactiveReconnect(socketRef.current)
+      scheduleProactiveReconnect(socketRef.current, getSocketAuth)
+
+      if (hasConnectedOnceRef.current) {
+        await recoverSocketSession('connect')
+      }
+      hasConnectedOnceRef.current = true
     })
 
     socketRef.current.on('connectionCount', (data: { total: number, byLanguage: Record<string, number> }) => {
@@ -533,37 +583,14 @@ function InputApp() {
       awaitingPongRef.current = false
 
       try {
-        await googleSpeechService.initialize(socketRef.current)
-        setIsServiceReady(googleSpeechService.isSocketReady())
-
-        if (wasStreamingBeforeDisconnectRef.current) {
-          wasStreamingBeforeDisconnectRef.current = false
-          try {
-            if (startRecognitionInternalRef.current) {
-              await startRecognitionInternalRef.current()
-              setShouldBeListening(true)
-              setReconnectNotice(null)
-            } else {
-              throw new Error('Recognition not ready')
-            }
-          } catch (resumeError) {
-            console.error('❌ Failed to auto-resume after reconnect:', resumeError)
-            setShouldBeListening(false)
-            googleSpeechService.stopRecognition()
-            setIsTranslating(false)
-            setAudioLevel(0)
-            setReconnectNotice(
-              'Connection restored — tap Start Recording to continue.'
-            )
-          }
-        }
+        await recoverSocketSession('reconnect')
       } catch (error) {
         console.error('❌ Failed to re-initialize Google Speech Service:', error)
         wasStreamingBeforeDisconnectRef.current = false
         setIsServiceReady(false)
       }
 
-      scheduleProactiveReconnect(socketRef.current)
+      scheduleProactiveReconnect(socketRef.current, getSocketAuth)
     })
 
     socketRef.current.on('reconnect_error', (error) => {
@@ -663,6 +690,7 @@ function InputApp() {
     })
 
     return () => {
+      hasConnectedOnceRef.current = false
       if (socketRef.current) {
         if ((socketRef.current as any).connectionCountInterval) {
           clearInterval((socketRef.current as any).connectionCountInterval)
@@ -799,35 +827,29 @@ function InputApp() {
     }
   }, [])
 
-  // Google Cloud Speech-to-Text recognition
-  const startGoogleSpeechRecognitionInternal = useCallback(async () => {
-    // Update Google Speech Service configuration
-    googleSpeechService.updateConfig({
-      languageCode: sourceLanguage,
-      speechStartTimeout: speechConfig.speechStartTimeout,
-      maxWordsPerBubble: speechConfig.maxWordsPerBubble
-    })
-
-    await googleSpeechService.startRecognition({
+  const speechRecognitionCallbacks = React.useMemo(
+    () => ({
       onStart: () => {
         setIsTranslating(true)
         setErrorMessage(null)
       },
       onEnd: () => {
         setIsTranslating(false)
-        setAudioLevel(0) // Reset audio level when recording ends
+        setAudioLevel(0)
       },
-      onInterimResult: (result) => {
+      onInterimResult: (result: { transcript: string }) => {
         setCurrentTranscription(result.transcript)
       },
-      onFinalResult: (result) => {
-        // Don't create empty bubbles
+      onFinalResult: (result: {
+        transcript: string
+        bubbleId: string
+      }) => {
         if (!result.transcript || !result.transcript.trim()) {
           setCurrentTranscription('')
           return
         }
 
-        const uniqueId = `${result.bubbleId}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const uniqueId = `${result.bubbleId}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
         const newBubble: MessageBubble = {
           id: uniqueId,
           text: result.transcript,
@@ -851,17 +873,40 @@ function InputApp() {
           )
         }, 250)
       },
-      onError: (error) => {
+      onError: (error: Error) => {
         console.error('❌ Google Speech recognition error:', error)
         setIsTranslating(false)
       },
-      onAudioLevel: (level) => {
+      onAudioLevel: (level: number) => {
         setAudioLevel(level)
       }
+    }),
+    []
+  )
+
+  // Google Cloud Speech-to-Text recognition
+  const startGoogleSpeechRecognitionInternal = useCallback(async () => {
+    googleSpeechService.updateConfig({
+      languageCode: sourceLanguage,
+      speechStartTimeout: speechConfig.speechStartTimeout,
+      maxWordsPerBubble: speechConfig.maxWordsPerBubble
     })
-  }, [sourceLanguage, speechConfig])
+
+    await googleSpeechService.startRecognition(speechRecognitionCallbacks)
+  }, [sourceLanguage, speechConfig, speechRecognitionCallbacks])
+
+  const resumeGoogleSpeechRecognitionInternal = useCallback(async () => {
+    googleSpeechService.updateConfig({
+      languageCode: sourceLanguage,
+      speechStartTimeout: speechConfig.speechStartTimeout,
+      maxWordsPerBubble: speechConfig.maxWordsPerBubble
+    })
+
+    await googleSpeechService.resumeRecognitionAfterReconnect(speechRecognitionCallbacks)
+  }, [sourceLanguage, speechConfig, speechRecognitionCallbacks])
 
   startRecognitionInternalRef.current = startGoogleSpeechRecognitionInternal
+  resumeRecognitionInternalRef.current = resumeGoogleSpeechRecognitionInternal
 
   // Google Cloud Speech-to-Text handlers
   const startGoogleSpeechRecognition = useCallback(async () => {

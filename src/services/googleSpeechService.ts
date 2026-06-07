@@ -97,22 +97,46 @@ class GoogleSpeechService {
       return;
     }
 
-    if (socketChanged) {
+    if (socketChanged && !this.hasActiveAudioCapture()) {
       this.teardownAudioCaptureForReconnect();
     }
 
-    if (this.socket) {
-      this.socket.removeAllListeners('transcriptionUpdate');
-      this.socket.removeAllListeners('finalResultReceived');
-      this.socket.removeAllListeners('streamRestart');
-      this.socket.removeAllListeners('forceFinalize');
-    }
-
+    this.detachSocketListeners();
     this.socket = socket;
     this.lastSocketId = currentSocketId;
-      
-      // Listen for transcription updates from backend
-      this.socket.on('transcriptionUpdate', (data: any) => {
+    this.attachSocketListeners();
+
+    if (!this.socket) {
+      throw new Error('Failed to initialize: socket is not available');
+    }
+  }
+
+  hasActiveAudioCapture(): boolean {
+    return (
+      this.isRecording &&
+      this.scriptProcessor !== null &&
+      isStreamLive(this.stream)
+    );
+  }
+
+  /** Rebind socket listeners without stopping the microphone pipeline. */
+  async reattachSocket(socket: any): Promise<void> {
+    await this.initialize(socket);
+  }
+
+  private detachSocketListeners(): void {
+    if (!this.socket) return;
+    this.socket.removeAllListeners('transcriptionUpdate');
+    this.socket.removeAllListeners('finalResultReceived');
+    this.socket.removeAllListeners('streamRestart');
+    this.socket.removeAllListeners('forceFinalize');
+    this.socket.removeAllListeners('connect');
+  }
+
+  private attachSocketListeners(): void {
+    if (!this.socket) return;
+
+    this.socket.on('transcriptionUpdate', (data: any) => {
         const isCurrentBubble = data.bubbleId === this.currentBubbleId;
 
         if (data.isFinal) {
@@ -242,16 +266,12 @@ class GoogleSpeechService {
 
         this.socket?.emit('forceFinalizeAck', {});
       });
-      
+
     this.socket.on('connect', () => {
       setTimeout(() => {
         this.processMessageQueue();
       }, 100);
     });
-
-    if (!this.socket) {
-      throw new Error('Failed to initialize: socket is not available');
-    }
   }
 
   /**
@@ -1144,12 +1164,6 @@ class GoogleSpeechService {
     
     if (!this.socket.connected) {
       this.queueMessage(event, data);
-      // Try to reconnect the socket
-      try {
-        this.socket.connect();
-      } catch (e) {
-        console.log('⚠️ Could not trigger socket reconnection:', e);
-      }
       return;
     }
 

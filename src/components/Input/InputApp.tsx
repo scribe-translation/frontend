@@ -39,6 +39,8 @@ import { isSessionCodeAuthError } from '../../utils/sessionCodeUtils'
 import {
   clearProactiveReconnectTimer,
   forceTransportReconnect,
+  isTransportSettling,
+  markTransportSettling,
   scheduleProactiveReconnect,
 } from '../../utils/socketReconnect'
 
@@ -348,7 +350,9 @@ function InputApp() {
   const awaitingPongRef = React.useRef<boolean>(false)
   const visibilityHiddenTimeRef = React.useRef<number | null>(null)
   const wasStreamingBeforeDisconnectRef = React.useRef<boolean>(false) // Track streaming state for auto-resume
+  const shouldBeListeningRef = React.useRef<boolean>(false)
   const isRecoveringSocketRef = React.useRef<boolean>(false)
+  const lastRecoveryAtRef = React.useRef<number>(0)
   const hasConnectedOnceRef = React.useRef<boolean>(false)
   const startRecognitionInternalRef = React.useRef<(() => Promise<void>) | null>(null)
   const resumeRecognitionInternalRef = React.useRef<(() => Promise<void>) | null>(null)
@@ -379,6 +383,10 @@ function InputApp() {
   useEffect(() => {
     isTranslatingRef.current = isTranslating
   }, [isTranslating])
+
+  useEffect(() => {
+    shouldBeListeningRef.current = shouldBeListening
+  }, [shouldBeListening])
 
   useEffect(() => {
     if (tokens && user && user.sessionCode) {
@@ -471,7 +479,11 @@ function InputApp() {
               setConnectionQuality('unstable')
             }
 
-            if (missedPongCountRef.current >= 3) {
+            if (
+              missedPongCountRef.current >= 3 &&
+              !isRecoveringSocketRef.current &&
+              !isTransportSettling()
+            ) {
               console.error('❌ Connection appears dead (3 missed pongs), forcing reconnection...')
               setConnectionQuality('disconnected')
               forceTransportReconnect(socketRef.current)
@@ -488,25 +500,39 @@ function InputApp() {
       ;(socketRef.current as any).heartbeatInterval = heartbeatInterval
     }
 
+    const RECOVERY_DEBOUNCE_MS = 3000
+
     const recoverSocketSession = async () => {
       if (!wasStreamingBeforeDisconnectRef.current || isRecoveringSocketRef.current) {
         return
       }
+
+      const now = Date.now()
+      if (now - lastRecoveryAtRef.current < RECOVERY_DEBOUNCE_MS) {
+        return
+      }
+      lastRecoveryAtRef.current = now
 
       isRecoveringSocketRef.current = true
       wasStreamingBeforeDisconnectRef.current = false
 
       console.log('🔄 Recovering speaker session after reconnect')
       try {
-        await googleSpeechService.initialize(socketRef.current)
-        setIsServiceReady(googleSpeechService.isSocketReady())
-
-        if (resumeRecognitionInternalRef.current) {
-          await resumeRecognitionInternalRef.current()
-          setShouldBeListening(true)
+        if (googleSpeechService.hasActiveAudioCapture()) {
+          await googleSpeechService.reattachSocket(socketRef.current)
+          setIsServiceReady(googleSpeechService.isSocketReady())
           setReconnectNotice(null)
         } else {
-          throw new Error('Recognition not ready')
+          await googleSpeechService.initialize(socketRef.current)
+          setIsServiceReady(googleSpeechService.isSocketReady())
+
+          if (resumeRecognitionInternalRef.current) {
+            await resumeRecognitionInternalRef.current()
+            setShouldBeListening(true)
+            setReconnectNotice(null)
+          } else {
+            throw new Error('Recognition not ready')
+          }
         }
       } catch (resumeError) {
         console.error('❌ Failed to auto-resume after reconnect:', resumeError)
@@ -519,6 +545,7 @@ function InputApp() {
         )
       } finally {
         isRecoveringSocketRef.current = false
+        markTransportSettling()
       }
     }
 
@@ -541,13 +568,18 @@ function InputApp() {
       missedPongCountRef.current = 0
       awaitingPongRef.current = false
 
-      if (hasConnectedOnceRef.current) {
+      const isReconnect = hasConnectedOnceRef.current
+      if (isReconnect) {
+        markTransportSettling()
         await recoverSocketSession()
       }
       hasConnectedOnceRef.current = true
 
-      setupSocketMonitoring()
-      scheduleProactiveReconnect(socketRef.current, getSocketAuth)
+      setTimeout(() => {
+        if (!socketRef.current?.connected) return
+        setupSocketMonitoring()
+        scheduleProactiveReconnect(socketRef.current, getSocketAuth)
+      }, isReconnect ? 1500 : 0)
     })
 
     socketRef.current.on('connectionCount', (data: { total: number, byLanguage: Record<string, number> }) => {
@@ -555,10 +587,13 @@ function InputApp() {
     })
 
     socketRef.current.on('disconnect', (reason) => {
-      console.log(`🔌 InputApp disconnected: ${reason}, wasStreaming: ${isTranslatingRef.current}`)
+      console.log(
+        `🔌 InputApp disconnected: ${reason}, shouldBeListening: ${shouldBeListeningRef.current}`
+      )
 
-      // Track if we were streaming for auto-resume on reconnect (use ref to avoid stale closure)
-      wasStreamingBeforeDisconnectRef.current = isTranslatingRef.current
+      if (!isRecoveringSocketRef.current) {
+        wasStreamingBeforeDisconnectRef.current = shouldBeListeningRef.current
+      }
 
       setIsSocketConnecting(false)
       setIsSocketConnected(false)
@@ -747,7 +782,12 @@ function InputApp() {
 
           // If no pong received within 3 seconds, force reconnect
           const verifyTimeout = setTimeout(() => {
-            if (awaitingPongRef.current && socketRef.current) {
+            if (
+              awaitingPongRef.current &&
+              socketRef.current &&
+              !isRecoveringSocketRef.current &&
+              !isTransportSettling()
+            ) {
               console.error('❌ No pong after foregrounding, forcing reconnection...')
               setConnectionQuality('disconnected')
               forceTransportReconnect(socketRef.current)

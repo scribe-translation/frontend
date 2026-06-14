@@ -1,7 +1,7 @@
 import type { Socket } from 'socket.io-client'
 
 /** Production default: reconnect before Cloud Run request timeout (3600s). */
-const DEFAULT_PROACTIVE_RECONNECT_MS = 50 * 60 * 1000
+const DEFAULT_PROACTIVE_RECONNECT_MS = 1 * 60 * 1000
 
 function parseProactiveReconnectMs(): number {
   const raw = import.meta.env.VITE_PROACTIVE_RECONNECT_MS

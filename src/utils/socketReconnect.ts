@@ -20,13 +20,28 @@ export const PROACTIVE_RECONNECT_MS = parseProactiveReconnectMs()
 
 const reconnectTimerKey = 'proactiveReconnectTimer'
 const lastRefreshKey = 'socketLastRefreshAt'
+const proactiveRescheduleSafetyKey = 'proactiveRescheduleSafety'
 
 /** Prevent refresh storms if something else is also trying to reconnect. */
 const MIN_REFRESH_INTERVAL_MS = 30_000
 
 /** Suppress heartbeat-driven reconnects while transport is settling. */
-const TRANSPORT_SETTLE_MS = 8_000
+const TRANSPORT_SETTLE_MS = 15_000
 let transportSettlingUntil = 0
+
+let proactiveRefreshInProgress = false
+
+export function markProactiveRefresh(): void {
+  proactiveRefreshInProgress = true
+}
+
+export function clearProactiveRefresh(): void {
+  proactiveRefreshInProgress = false
+}
+
+export function isProactiveRefreshInProgress(): boolean {
+  return proactiveRefreshInProgress
+}
 
 export function markTransportSettling(): void {
   transportSettlingUntil = Date.now() + TRANSPORT_SETTLE_MS
@@ -41,10 +56,18 @@ export type SocketAuthProvider = () => Record<string, unknown>
 type SocketMeta = Socket & {
   [reconnectTimerKey]?: ReturnType<typeof setTimeout>
   [lastRefreshKey]?: number
+  [proactiveRescheduleSafetyKey]?: ReturnType<typeof setTimeout>
 }
 
 function asMeta(socket: Socket | null): SocketMeta | null {
   return socket as SocketMeta | null
+}
+
+function clearProactiveRescheduleSafety(socket: Socket | null): void {
+  const meta = asMeta(socket)
+  if (!meta?.[proactiveRescheduleSafetyKey]) return
+  clearTimeout(meta[proactiveRescheduleSafetyKey])
+  meta[proactiveRescheduleSafetyKey] = undefined
 }
 
 export function clearProactiveReconnectTimer(socket: Socket | null): void {
@@ -87,7 +110,14 @@ export function refreshSocketConnection(
   }
 
   console.log('🔄 Proactive reconnect before platform timeout')
+  markProactiveRefresh()
   forceTransportReconnect(meta)
+
+  clearProactiveRescheduleSafety(meta)
+  meta[proactiveRescheduleSafetyKey] = setTimeout(() => {
+    meta[proactiveRescheduleSafetyKey] = undefined
+    scheduleProactiveReconnect(meta, getAuth)
+  }, 10_000)
 }
 
 export function scheduleProactiveReconnect(
@@ -97,6 +127,7 @@ export function scheduleProactiveReconnect(
   const meta = asMeta(socket)
   if (!meta) return
   clearProactiveReconnectTimer(meta)
+  clearProactiveRescheduleSafety(meta)
   if (import.meta.env.VITE_NODE_ENV === 'dev') {
     console.log(
       `⏱️ Proactive reconnect scheduled in ${Math.round(PROACTIVE_RECONNECT_MS / 1000)}s`
@@ -110,6 +141,6 @@ export function scheduleProactiveReconnect(
 /** Safety net when the manager stops retrying but the socket instance still exists. */
 export function ensureSocketReconnecting(socket: Socket | null): void {
   if (!socket || socket.connected) return
-  socket.active = true
+  if (socket.io.reconnecting) return
   socket.connect()
 }

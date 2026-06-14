@@ -786,7 +786,6 @@ function TranslationApp() {
       }
       if (hasJoinedListeningRef.current) {
         setIsConnecting(true)
-        ensureSocketReconnecting(socketRef.current)
       } else {
         setIsConnecting(false)
       }
@@ -799,10 +798,8 @@ function TranslationApp() {
       sourceLanguage?: string 
     }) => {
       setIsSpeakerTyping(data.isTyping)
-      if (data.isTyping) {
-        setInterimText(data.translatedInterimText || null)
-      } else if (!data.isTyping) {
-        setInterimText(null)
+      if (data.translatedInterimText) {
+        setInterimText(data.translatedInterimText)
       }
     })
 
@@ -918,7 +915,6 @@ function TranslationApp() {
       setIsConnected(false)
       if (hasJoinedListeningRef.current) {
         setIsConnecting(true)
-        ensureSocketReconnecting(socketRef.current)
       } else {
         setIsConnecting(false)
       }
@@ -929,7 +925,6 @@ function TranslationApp() {
       setIsConnected(false)
       if (hasJoinedListeningRef.current) {
         setIsConnecting(true)
-        ensureSocketReconnecting(socketRef.current)
       } else {
         setIsConnecting(false)
       }

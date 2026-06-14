@@ -38,7 +38,9 @@ import {
 import { isSessionCodeAuthError } from '../../utils/sessionCodeUtils'
 import {
   clearProactiveReconnectTimer,
+  clearProactiveRefresh,
   forceTransportReconnect,
+  isProactiveRefreshInProgress,
   isTransportSettling,
   markTransportSettling,
   scheduleProactiveReconnect,
@@ -348,6 +350,7 @@ function InputApp() {
   const lastPongTimeRef = React.useRef<number>(Date.now())
   const missedPongCountRef = React.useRef<number>(0)
   const awaitingPongRef = React.useRef<boolean>(false)
+  const awaitingFirstPongRef = React.useRef<boolean>(false)
   const visibilityHiddenTimeRef = React.useRef<number | null>(null)
   const wasStreamingBeforeDisconnectRef = React.useRef<boolean>(false) // Track streaming state for auto-resume
   const shouldBeListeningRef = React.useRef<boolean>(false)
@@ -471,7 +474,7 @@ function InputApp() {
 
       const heartbeatInterval = setInterval(() => {
         if (socketRef.current?.connected) {
-          if (awaitingPongRef.current) {
+          if (awaitingPongRef.current && !awaitingFirstPongRef.current) {
             missedPongCountRef.current++
             console.warn(`⚠️ Missed pong #${missedPongCountRef.current}`)
 
@@ -520,6 +523,7 @@ function InputApp() {
       try {
         if (googleSpeechService.hasActiveAudioCapture()) {
           await googleSpeechService.reattachSocket(socketRef.current)
+          googleSpeechService.reemitInterimToUI()
           setIsServiceReady(googleSpeechService.isSocketReady())
           setReconnectNotice(null)
         } else {
@@ -569,9 +573,22 @@ function InputApp() {
       awaitingPongRef.current = false
 
       const isReconnect = hasConnectedOnceRef.current
+      const isProactive = isProactiveRefreshInProgress()
+
       if (isReconnect) {
         markTransportSettling()
-        await recoverSocketSession()
+        awaitingFirstPongRef.current = true
+
+        if (isProactive && googleSpeechService.hasActiveAudioCapture()) {
+          await googleSpeechService.reattachSocket(socketRef.current)
+          googleSpeechService.reemitInterimToUI()
+          setIsServiceReady(googleSpeechService.isSocketReady())
+          clearProactiveRefresh()
+        } else if (!isProactive) {
+          await recoverSocketSession()
+        } else {
+          clearProactiveRefresh()
+        }
       }
       hasConnectedOnceRef.current = true
 
@@ -591,7 +608,7 @@ function InputApp() {
         `🔌 InputApp disconnected: ${reason}, shouldBeListening: ${shouldBeListeningRef.current}`
       )
 
-      if (!isRecoveringSocketRef.current) {
+      if (!isRecoveringSocketRef.current && !isProactiveRefreshInProgress()) {
         wasStreamingBeforeDisconnectRef.current = shouldBeListeningRef.current
       }
 
@@ -675,6 +692,7 @@ function InputApp() {
       // Track successful pong - connection is healthy
       lastPongTimeRef.current = Date.now()
       awaitingPongRef.current = false
+      awaitingFirstPongRef.current = false
 
       // Clear visibility verification timeout if pending
       if ((socketRef.current as any)?.visibilityVerifyTimeout) {
@@ -690,8 +708,12 @@ function InputApp() {
       }
     })
 
-    // Listen for stream restart events to save displayed interim text (error recovery / language change)
+    // Only commit interim to a final bubble on language change — not on reconnect/recovery restarts
     socketRef.current.on('streamRestart', (data: { reason: string }) => {
+      if (data.reason !== 'language_changed') {
+        return
+      }
+
       const displayedText = currentTranscriptionRef.current
       if (displayedText && displayedText.trim()) {
         // Save the displayed text as a final bubble
@@ -881,6 +903,9 @@ function InputApp() {
         setAudioLevel(0)
       },
       onInterimResult: (result: { transcript: string }) => {
+        if (!result.transcript.trim() && currentTranscriptionRef.current.trim()) {
+          return
+        }
         setCurrentTranscription(result.transcript)
       },
       onFinalResult: (result: {

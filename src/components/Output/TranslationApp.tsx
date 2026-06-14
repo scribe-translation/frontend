@@ -24,7 +24,10 @@ import {
 } from '../../utils/sessionCodeUtils'
 import {
   clearProactiveReconnectTimer,
+  ensureSocketReconnecting,
   forceTransportReconnect,
+  isTransportSettling,
+  markTransportSettling,
   scheduleProactiveReconnect,
 } from '../../utils/socketReconnect'
 
@@ -508,6 +511,8 @@ function TranslationApp() {
   const awaitingPongRef = useRef<boolean>(false)
   const visibilityHiddenTimeRef = useRef<number | null>(null)
   const hasConnectedOnceRef = useRef(false)
+  const hasJoinedListeningRef = useRef(false)
+  const reconnectFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const sessionCodeRef = useRef<string | null>(null)
 
   // Keep ref in sync with state for socket handlers
@@ -537,6 +542,7 @@ function TranslationApp() {
   )
 
   const resetSessionJoinState = useCallback(() => {
+    hasJoinedListeningRef.current = false
     setSessionCodeValidated(false)
     clearSessionCode()
     setSessionCodeInput('')
@@ -647,10 +653,20 @@ function TranslationApp() {
       sessionCode: sessionCodeRef.current,
     })
 
+    const clearReconnectFallback = () => {
+      if (reconnectFallbackTimerRef.current) {
+        clearTimeout(reconnectFallbackTimerRef.current)
+        reconnectFallbackTimerRef.current = null
+      }
+    }
+
     const restoreListenerSession = (isReconnect: boolean) => {
+      if (!hasJoinedListeningRef.current) {
+        return
+      }
+
       const currentTargetLanguage = targetLanguageRef.current
-      const isOnLandingPage = showLanguageSelectionRef.current
-      if (!currentTargetLanguage || isOnLandingPage) {
+      if (!currentTargetLanguage) {
         return
       }
 
@@ -678,7 +694,10 @@ function TranslationApp() {
               setConnectionQuality('unstable')
             }
 
-            if (missedPongCountRef.current >= 3) {
+            if (
+              missedPongCountRef.current >= 3 &&
+              !isTransportSettling()
+            ) {
               console.error('❌ Connection appears dead (3 missed pongs), forcing reconnection...')
               setConnectionQuality('disconnected')
               forceTransportReconnect(socketRef.current)
@@ -705,6 +724,7 @@ function TranslationApp() {
     })
 
     socketRef.current.on('connect', () => {
+      clearReconnectFallback()
       setIsConnecting(false)
       setIsConnected(true)
       setConnectionQuality('good')
@@ -713,32 +733,61 @@ function TranslationApp() {
       missedPongCountRef.current = 0
       awaitingPongRef.current = false
 
-      restoreListenerSession(hasConnectedOnceRef.current)
+      const isReconnect = hasConnectedOnceRef.current
+      if (isReconnect) {
+        markTransportSettling()
+      }
+
+      restoreListenerSession(isReconnect)
       hasConnectedOnceRef.current = true
 
-      setupSocketMonitoring()
-      scheduleProactiveReconnect(socketRef.current, getSocketAuth)
+      setTimeout(() => {
+        if (!socketRef.current?.connected) return
+        setupSocketMonitoring()
+        scheduleProactiveReconnect(socketRef.current, getSocketAuth)
+      }, isReconnect ? 1500 : 0)
     })
 
     socketRef.current.on('disconnect', (reason) => {
       console.log(`🔌 TranslationApp disconnected: ${reason}`)
-      setIsConnecting(false)
       setIsConnected(false)
 
-      // Clear heartbeat interval
       if ((socketRef.current as any)?.heartbeatInterval) {
         clearInterval((socketRef.current as any).heartbeatInterval)
       }
       clearProactiveReconnectTimer(socketRef.current)
+
+      if (reason === 'io client disconnect') {
+        setIsConnecting(false)
+        return
+      }
+
+      if (hasJoinedListeningRef.current) {
+        setIsConnecting(true)
+        clearReconnectFallback()
+        reconnectFallbackTimerRef.current = setTimeout(() => {
+          if (socketRef.current && !socketRef.current.connected) {
+            console.warn('⚠️ Listener still disconnected, forcing socket.connect()')
+            ensureSocketReconnecting(socketRef.current)
+          }
+        }, 3000)
+      } else {
+        setIsConnecting(false)
+      }
     })
 
     socketRef.current.on('connect_error', (error: Error) => {
       console.error('🔗 TranslationApp - Connection error:', error)
-      setIsConnecting(false)
       setIsConnected(false)
       const message = error?.message || ''
       if (isSessionCodeAuthError(message)) {
         handleSessionCodeAuthFailure(message, sessionCode ?? undefined)
+        return
+      }
+      if (hasJoinedListeningRef.current) {
+        setIsConnecting(true)
+      } else {
+        setIsConnecting(false)
       }
     })
 
@@ -749,10 +798,8 @@ function TranslationApp() {
       sourceLanguage?: string 
     }) => {
       setIsSpeakerTyping(data.isTyping)
-      if (data.isTyping) {
-        setInterimText(data.translatedInterimText || null)
-      } else if (!data.isTyping) {
-        setInterimText(null)
+      if (data.translatedInterimText) {
+        setInterimText(data.translatedInterimText)
       }
     })
 
@@ -854,20 +901,33 @@ function TranslationApp() {
     })
 
 
+    socketRef.current.on('reconnect_attempt', () => {
+      setIsConnecting(true)
+      setIsConnected(false)
+    })
+
     socketRef.current.on('reconnect', (attemptNumber) => {
       console.log(`🔄 TranslationApp reconnected after ${attemptNumber} attempts`)
     })
 
     socketRef.current.on('reconnect_error', (error) => {
       console.error('❌ TranslationApp reconnection error:', error)
-      setIsConnecting(false)
       setIsConnected(false)
+      if (hasJoinedListeningRef.current) {
+        setIsConnecting(true)
+      } else {
+        setIsConnecting(false)
+      }
     })
 
     socketRef.current.on('reconnect_failed', () => {
       console.error('❌ TranslationApp reconnection failed after all attempts')
-      setIsConnecting(false)
       setIsConnected(false)
+      if (hasJoinedListeningRef.current) {
+        setIsConnecting(true)
+      } else {
+        setIsConnecting(false)
+      }
     })
 
     socketRef.current.on('pong', () => {
@@ -890,6 +950,7 @@ function TranslationApp() {
     })
 
     return () => {
+      clearReconnectFallback()
       hasConnectedOnceRef.current = false
       if (socketRef.current) {
         if ((socketRef.current as any).heartbeatInterval) {
@@ -926,7 +987,11 @@ function TranslationApp() {
 
           // If no pong received within 3 seconds, force reconnect
           const verifyTimeout = setTimeout(() => {
-            if (awaitingPongRef.current && socketRef.current) {
+            if (
+              awaitingPongRef.current &&
+              socketRef.current &&
+              !isTransportSettling()
+            ) {
               console.error('❌ No pong after foregrounding, forcing reconnection...')
               setConnectionQuality('disconnected')
               forceTransportReconnect(socketRef.current)
@@ -1105,7 +1170,7 @@ function TranslationApp() {
               color="primary"
               onClick={() => {
                 if (targetLanguage) {
-                  // Set the target language on the server when user starts listening
+                  hasJoinedListeningRef.current = true
                   socketRef.current?.emit('setTargetLanguage', { targetLanguage })
                   setShowLanguageSelection(false)
                 }

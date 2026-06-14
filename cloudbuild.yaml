@@ -17,6 +17,7 @@ steps:
       - 'VITE_BACKEND_URL=${_VITE_BACKEND_URL}'
       - 'VITE_TRANSLATION_URL=${_VITE_TRANSLATION_URL}'
       - 'VITE_INPUT_URL=${_VITE_INPUT_URL}'
+      - 'VITE_PROACTIVE_RECONNECT_MS=${_VITE_PROACTIVE_RECONNECT_MS}'
 
   # Build container image
   - id: 'build-container-image'
@@ -65,6 +66,7 @@ substitutions:
   _VITE_BACKEND_URL: 'https://api.scribe-ai.ca'
   _VITE_TRANSLATION_URL: 'https://listener.scribe-ai.ca'
   _VITE_INPUT_URL: 'https://speaker.scribe-ai.ca'
+  _VITE_PROACTIVE_RECONNECT_MS: ''
   _VERSION: ''
   TAG_NAME: '$COMMIT_SHA'
 

@@ -6,6 +6,11 @@ import {
   type MicrophonePermissionState,
   type StreamEndedCleanup,
 } from '../utils/microphonePermission';
+import {
+  acquireDisplayMediaAudioStream,
+  getDisplayMediaErrorMessage,
+  isDisplayMediaAudioDevice,
+} from '../utils/audioInputDevices';
 
 interface SpeechRecognitionConfig {
   languageCode: string;
@@ -97,22 +102,47 @@ class GoogleSpeechService {
       return;
     }
 
-    if (socketChanged) {
+    if (socketChanged && !this.hasActiveAudioCapture()) {
       this.teardownAudioCaptureForReconnect();
     }
 
-    if (this.socket) {
-      this.socket.removeAllListeners('transcriptionUpdate');
-      this.socket.removeAllListeners('finalResultReceived');
-      this.socket.removeAllListeners('streamRestart');
-      this.socket.removeAllListeners('forceFinalize');
-    }
-
+    this.detachSocketListeners();
     this.socket = socket;
     this.lastSocketId = currentSocketId;
-      
-      // Listen for transcription updates from backend
-      this.socket.on('transcriptionUpdate', (data: any) => {
+    this.attachSocketListeners();
+
+    if (!this.socket) {
+      throw new Error('Failed to initialize: socket is not available');
+    }
+  }
+
+  hasActiveAudioCapture(): boolean {
+    return (
+      this.isRecording &&
+      this.scriptProcessor !== null &&
+      isStreamLive(this.stream)
+    );
+  }
+
+  /** Rebind socket listeners without stopping the microphone pipeline. */
+  async reattachSocket(socket: any): Promise<void> {
+    await this.initialize(socket);
+  }
+
+  private detachSocketListeners(): void {
+    if (!this.socket) return;
+    this.socket.removeAllListeners('transcriptionUpdate');
+    this.socket.removeAllListeners('finalResultReceived');
+    this.socket.removeAllListeners('streamRestart');
+    this.socket.removeAllListeners('forceFinalize');
+    this.socket.removeAllListeners('connect');
+    this.socket.removeAllListeners('disconnect');
+  }
+
+  private attachSocketListeners(): void {
+    if (!this.socket) return;
+
+    this.socket.on('transcriptionUpdate', (data: any) => {
         const isCurrentBubble = data.bubbleId === this.currentBubbleId;
 
         if (data.isFinal) {
@@ -144,6 +174,15 @@ class GoogleSpeechService {
             return;
           }
 
+          const incoming = (data.transcript || '').trim();
+          const preserved = (this.currentTranscript || '').trim();
+
+          // After reconnect, Google may return empty interim before catching up —
+          // never wipe visible interim text with an empty update.
+          if (!incoming && preserved) {
+            return;
+          }
+
           if (this.callbacks?.onInterimResult) {
             this.currentTranscript = data.transcript;
             this.currentWordCount = data.transcript.trim().split(/\s+/).filter(w => w.length > 0).length;
@@ -171,28 +210,31 @@ class GoogleSpeechService {
       
       // Listen for stream restart requests from backend (error recovery or language change)
       this.socket.on('streamRestart', (data: any) => {
-        if (this.isRecording) {
-          if (data.reason === 'language_changed') {
-            this.currentTranscript = '';
-            this.lastClientFinalizedBubbleId = null;
-            this.currentBubbleId = this.generateBubbleId();
-            this.hasReceivedFinalResult = false;
-            if (this.callbacks?.onInterimResult) {
-              this.callbacks.onInterimResult({
-                transcript: '',
-                isFinal: false,
-                confidence: 0,
-                wordCount: 0,
-                bubbleId: this.currentBubbleId
-              });
-            }
-          } else {
-            this.lastClientFinalizedBubbleId = null;
-            this.currentBubbleId = this.generateBubbleId();
-            this.currentTranscript = '';
-            this.hasReceivedFinalResult = false;
-          }
+        if (!this.isRecording) {
+          return;
         }
+
+        if (data.reason === 'language_changed') {
+          this.currentTranscript = '';
+          this.lastClientFinalizedBubbleId = null;
+          this.currentBubbleId = this.generateBubbleId();
+          this.hasReceivedFinalResult = false;
+          if (this.callbacks?.onInterimResult) {
+            this.callbacks.onInterimResult({
+              transcript: '',
+              isFinal: false,
+              confidence: 0,
+              wordCount: 0,
+              bubbleId: this.currentBubbleId
+            });
+          }
+          return;
+        }
+
+        // Preserve in-progress interim across recovery/reconnect stream restarts
+        this.lastClientFinalizedBubbleId = null;
+        this.hasReceivedFinalResult = false;
+        this.reemitInterimToUI();
       });
 
       this.socket.on('forceFinalize', () => {
@@ -242,16 +284,32 @@ class GoogleSpeechService {
 
         this.socket?.emit('forceFinalizeAck', {});
       });
-      
+
     this.socket.on('connect', () => {
+      this.reemitInterimToUI();
       setTimeout(() => {
         this.processMessageQueue();
       }, 100);
     });
 
-    if (!this.socket) {
-      throw new Error('Failed to initialize: socket is not available');
+    this.socket.on('disconnect', () => {
+      this.clearMessageQueue();
+    });
+  }
+
+  /** Re-push in-progress interim text to the UI after a socket reconnect. */
+  reemitInterimToUI(): void {
+    if (!this.callbacks?.onInterimResult || !this.currentTranscript.trim()) {
+      return;
     }
+
+    this.callbacks.onInterimResult({
+      transcript: this.currentTranscript,
+      isFinal: false,
+      confidence: 0,
+      wordCount: this.currentWordCount,
+      bubbleId: this.currentBubbleId
+    });
   }
 
   /**
@@ -278,24 +336,30 @@ class GoogleSpeechService {
     this.releaseMicrophone();
 
     try {
+      const isDisplayMedia = isDisplayMediaAudioDevice(deviceId);
       const isMobileDevice = this.detectMobileDevice();
-      const audioConstraints: MediaTrackConstraints = {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: false,
-      };
 
-      if (isMobileDevice) {
-        audioConstraints.sampleRate = { ideal: 48000 };
+      if (isDisplayMedia) {
+        this.stream = await acquireDisplayMediaAudioStream();
+      } else {
+        const audioConstraints: MediaTrackConstraints = {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: false,
+        };
+
+        if (isMobileDevice) {
+          audioConstraints.sampleRate = { ideal: 48000 };
+        }
+
+        if (deviceId) {
+          audioConstraints.deviceId = { exact: deviceId };
+        }
+
+        this.stream = await navigator.mediaDevices.getUserMedia({
+          audio: audioConstraints,
+        });
       }
-
-      if (deviceId) {
-        audioConstraints.deviceId = { exact: deviceId };
-      }
-
-      this.stream = await navigator.mediaDevices.getUserMedia({
-        audio: audioConstraints,
-      });
 
       this.activeDeviceId = deviceId;
 
@@ -328,8 +392,11 @@ class GoogleSpeechService {
       await this.resumeAudioContext();
     } catch (error) {
       this.releaseMicrophone();
-      console.error('❌ Failed to access microphone:', error);
-      throw new Error(getMicrophoneErrorMessage(error));
+      console.error('❌ Failed to access audio input:', error);
+      const message = isDisplayMediaAudioDevice(deviceId)
+        ? getDisplayMediaErrorMessage(error)
+        : getMicrophoneErrorMessage(error);
+      throw new Error(message);
     }
   }
 
@@ -810,6 +877,9 @@ class GoogleSpeechService {
       
       // If no audio sent in 5 seconds, send a silent audio frame
       if (timeSinceLastAudio > 5000) {
+        if (!this.socket?.connected) {
+          return;
+        }
         // Create a small silent audio buffer (256 samples of silence)
         const silentAudio = new Int16Array(256);
         this.sendRawAudioChunk(silentAudio);
@@ -829,6 +899,10 @@ class GoogleSpeechService {
   }
 
   private sendRawAudioChunk(int16Data: Int16Array): void {
+    if (!this.socket?.connected) {
+      return;
+    }
+
     if (!this.socket) {
       console.error('❌ No socket connection available');
       return;
@@ -1138,18 +1212,10 @@ class GoogleSpeechService {
    */
   private sendWithRetry(event: string, data: any): void {
     if (!this.socket) {
-      this.queueMessage(event, data);
       return;
     }
     
     if (!this.socket.connected) {
-      this.queueMessage(event, data);
-      // Try to reconnect the socket
-      try {
-        this.socket.connect();
-      } catch (e) {
-        console.log('⚠️ Could not trigger socket reconnection:', e);
-      }
       return;
     }
 
@@ -1157,7 +1223,6 @@ class GoogleSpeechService {
       this.socket.emit(event, data);
     } catch (error) {
       console.error('❌ Failed to send message:', error);
-      this.queueMessage(event, data);
     }
   }
 

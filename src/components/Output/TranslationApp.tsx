@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react'
 import Typography from '../UI/Typography'
-import { Paper, Chip, Button, Box, useMediaQuery, useTheme, CircularProgress, TextField, IconButton, Tooltip, Snackbar, Alert } from '@mui/material'
+import { Paper, Chip, Button, Box, useMediaQuery, useTheme, CircularProgress, TextField, IconButton, Tooltip, Snackbar, Alert, ToggleButton, ToggleButtonGroup } from '@mui/material'
 import OutputLanguageSelector from '../OutputLanguageSelector'
 import { GoogleCTLanguageCode, getCTLanguageInfo, isValidCTLanguageCode } from '../../enums/googleCTLangs'
 import { isTTSSupported } from '../../enums/googleTTSLangs'
@@ -24,12 +24,35 @@ import {
 } from '../../utils/sessionCodeUtils'
 import {
   clearProactiveReconnectTimer,
+  clearProactiveRefresh,
   ensureSocketReconnecting,
   forceTransportReconnect,
   isTransportSettling,
   markTransportSettling,
   scheduleProactiveReconnect,
 } from '../../utils/socketReconnect'
+
+const REGISTRATION_CONFIRM_TIMEOUT_MS = 3000
+const REGISTRATION_MAX_RETRIES = 3
+
+const TTS_SPEED_PRESETS = [0.85, 1, 1.15, 1.35, 1.5] as const
+const DEFAULT_TTS_SPEED = 1.15
+const TTS_SPEED_STORAGE_KEY = 'scribe-tts-speed'
+
+function getInitialTtsPlaybackRate(): number {
+  const saved = localStorage.getItem(TTS_SPEED_STORAGE_KEY)
+  if (saved) {
+    const parsed = parseFloat(saved)
+    if (TTS_SPEED_PRESETS.includes(parsed as (typeof TTS_SPEED_PRESETS)[number])) {
+      return parsed
+    }
+  }
+  return DEFAULT_TTS_SPEED
+}
+
+function formatTtsSpeedLabel(rate: number): string {
+  return `${parseFloat(rate.toFixed(2))}x`
+}
 
 const LandingPageContainer = styled.div`
   display: flex;
@@ -299,10 +322,12 @@ function TranslationApp() {
   // Text-to-Speech state
   const [ttsEnabled, setTtsEnabled] = useState(false)
   const [isSpeaking, setIsSpeaking] = useState(false)
+  const [ttsPlaybackRate, setTtsPlaybackRate] = useState(getInitialTtsPlaybackRate)
   const speechQueueRef = useRef<string[]>([])
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const isProcessingRef = useRef(false)
   const ttsEnabledRef = useRef(false) // Ref to track ttsEnabled for callbacks
+  const ttsPlaybackRateRef = useRef(ttsPlaybackRate)
   const targetLanguageRef = useRef(targetLanguage) // Ref for target language
   const queueSpeechRef = useRef<((text: string) => void) | null>(null) // Ref for queueSpeech function
   const showLanguageSelectionRef = useRef(true) // Ref to track if user has joined (for socket handlers)
@@ -367,8 +392,25 @@ function TranslationApp() {
   }, [ttsEnabled])
 
   useEffect(() => {
+    ttsPlaybackRateRef.current = ttsPlaybackRate
+    localStorage.setItem(TTS_SPEED_STORAGE_KEY, String(ttsPlaybackRate))
+  }, [ttsPlaybackRate])
+
+  useEffect(() => {
+    if (audioRef.current && !audioRef.current.paused) {
+      audioRef.current.playbackRate = ttsPlaybackRate
+    }
+  }, [ttsPlaybackRate])
+
+  useEffect(() => {
     targetLanguageRef.current = targetLanguage
   }, [targetLanguage])
+
+  const handleTtsSpeedChange = useCallback((_: React.MouseEvent<HTMLElement>, newSpeed: number | null) => {
+    if (newSpeed !== null) {
+      setTtsPlaybackRate(newSpeed)
+    }
+  }, [])
 
   // Ref for processQueue to avoid stale closure issues
   const processQueueRef = useRef<() => void>(() => { })
@@ -429,6 +471,7 @@ function TranslationApp() {
       }
 
       audioRef.current.src = audioUrl
+      audioRef.current.playbackRate = ttsPlaybackRateRef.current
       audioRef.current.play().catch(err => {
         console.error('🔊 TTS: Playback error:', err)
         URL.revokeObjectURL(audioUrl)
@@ -500,6 +543,51 @@ function TranslationApp() {
     })
   }, [ttsAvailable])
 
+  const renderTtsSpeedControl = (compact = false) => {
+    if (!ttsAvailable || !ttsEnabled) return null
+
+    return (
+      <Box sx={{ width: '100%', marginTop: compact ? 0 : '0.75rem' }}>
+        <ToggleButtonGroup
+          value={ttsPlaybackRate}
+          exclusive
+          onChange={handleTtsSpeedChange}
+          size={compact ? 'small' : 'medium'}
+          fullWidth
+          sx={{
+            '& .MuiToggleButton-root': {
+              flex: 1,
+              textTransform: 'none',
+              fontWeight: 600,
+              fontSize: compact ? '0.7rem' : '0.8rem',
+              padding: compact ? '0.25rem 0.15rem' : '0.4rem 0.25rem',
+            },
+          }}
+        >
+          {TTS_SPEED_PRESETS.map((speed) => (
+            <ToggleButton key={speed} value={speed} aria-label={`${formatTtsSpeedLabel(speed)} speed`}>
+              {formatTtsSpeedLabel(speed)}
+            </ToggleButton>
+          ))}
+        </ToggleButtonGroup>
+        {!compact && (
+          <Typography
+            variant="captionText"
+            sx={{
+              display: 'block',
+              textAlign: 'center',
+              marginTop: '0.5rem',
+              color: 'text.secondary',
+              fontSize: '0.75rem',
+            }}
+          >
+            Adjust read-aloud speed
+          </Typography>
+        )}
+      </Box>
+    )
+  }
+
   const [isConnected, setIsConnected] = useState(false)
   const [isConnecting, setIsConnecting] = useState(false)
   const [showLanguageSelection, setShowLanguageSelection] = useState(true)
@@ -513,6 +601,9 @@ function TranslationApp() {
   const hasConnectedOnceRef = useRef(false)
   const hasJoinedListeningRef = useRef(false)
   const reconnectFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const registrationRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const registrationAwaitingConfirmRef = useRef(false)
+  const registrationRetryCountRef = useRef(0)
   const sessionCodeRef = useRef<string | null>(null)
 
   // Keep ref in sync with state for socket handlers
@@ -660,6 +751,55 @@ function TranslationApp() {
       }
     }
 
+    const clearRegistrationRetry = () => {
+      if (registrationRetryTimerRef.current) {
+        clearTimeout(registrationRetryTimerRef.current)
+        registrationRetryTimerRef.current = null
+      }
+    }
+
+    const scheduleProactiveReconnectIfListening = () => {
+      if (hasJoinedListeningRef.current && socketRef.current?.connected) {
+        scheduleProactiveReconnect(socketRef.current, getSocketAuth)
+      }
+    }
+
+    const handleRegistrationTimeout = () => {
+      if (!registrationAwaitingConfirmRef.current) {
+        return
+      }
+
+      if (registrationRetryCountRef.current < REGISTRATION_MAX_RETRIES) {
+        registrationRetryCountRef.current++
+        console.warn(
+          `⚠️ No targetLanguageConfirmed — retry ${registrationRetryCountRef.current}/${REGISTRATION_MAX_RETRIES}`
+        )
+        const currentTargetLanguage = targetLanguageRef.current
+        if (currentTargetLanguage) {
+          socketRef.current?.emit('setTargetLanguage', { targetLanguage: currentTargetLanguage })
+        }
+        registrationRetryTimerRef.current = setTimeout(
+          handleRegistrationTimeout,
+          REGISTRATION_CONFIRM_TIMEOUT_MS
+        )
+        return
+      }
+
+      console.error('❌ Listener registration failed after retries — translations may not arrive')
+      registrationAwaitingConfirmRef.current = false
+      clearRegistrationRetry()
+    }
+
+    const beginRegistrationConfirmation = () => {
+      registrationAwaitingConfirmRef.current = true
+      registrationRetryCountRef.current = 0
+      clearRegistrationRetry()
+      registrationRetryTimerRef.current = setTimeout(
+        handleRegistrationTimeout,
+        REGISTRATION_CONFIRM_TIMEOUT_MS
+      )
+    }
+
     const restoreListenerSession = (isReconnect: boolean) => {
       if (!hasJoinedListeningRef.current) {
         return
@@ -672,6 +812,7 @@ function TranslationApp() {
 
       console.log(`🔗 Re-establishing target language${isReconnect ? ' after reconnect' : ''}: ${currentTargetLanguage}`)
       socketRef.current?.emit('setTargetLanguage', { targetLanguage: currentTargetLanguage })
+      beginRegistrationConfirmation()
 
       if (isReconnect) {
         console.log('📬 Requesting missed messages after reconnect')
@@ -714,6 +855,18 @@ function TranslationApp() {
       ;(socketRef.current as any).heartbeatInterval = heartbeatInterval
     }
 
+    const finalizeReconnect = (isReconnect: boolean) => {
+      restoreListenerSession(isReconnect)
+      clearProactiveRefresh()
+
+      if (!socketRef.current?.connected) {
+        return
+      }
+
+      setupSocketMonitoring()
+      scheduleProactiveReconnectIfListening()
+    }
+
     socketRef.current = io(CONFIG.BACKEND_URL, {
       auth: getSocketAuth(),
       reconnection: true,
@@ -738,14 +891,8 @@ function TranslationApp() {
         markTransportSettling()
       }
 
-      restoreListenerSession(isReconnect)
+      finalizeReconnect(isReconnect)
       hasConnectedOnceRef.current = true
-
-      setTimeout(() => {
-        if (!socketRef.current?.connected) return
-        setupSocketMonitoring()
-        scheduleProactiveReconnect(socketRef.current, getSocketAuth)
-      }, isReconnect ? 1500 : 0)
     })
 
     socketRef.current.on('disconnect', (reason) => {
@@ -901,6 +1048,31 @@ function TranslationApp() {
     })
 
 
+    socketRef.current.on('targetLanguageConfirmed', (data: {
+      socketId?: string
+      sessionCode?: string
+      targetLanguage?: string
+      queueBound?: boolean
+    }) => {
+      if (!data.queueBound) {
+        console.warn('⚠️ Server accepted target language but message queue is not bound — retrying')
+        if (registrationRetryCountRef.current < REGISTRATION_MAX_RETRIES) {
+          registrationRetryCountRef.current++
+          const currentTargetLanguage = targetLanguageRef.current
+          if (currentTargetLanguage) {
+            socketRef.current?.emit('setTargetLanguage', { targetLanguage: currentTargetLanguage })
+          }
+          beginRegistrationConfirmation()
+        }
+        return
+      }
+
+      registrationAwaitingConfirmRef.current = false
+      registrationRetryCountRef.current = 0
+      clearRegistrationRetry()
+      console.log(`✅ Listener registered on server: ${data.targetLanguage}`)
+    })
+
     socketRef.current.on('reconnect_attempt', () => {
       setIsConnecting(true)
       setIsConnected(false)
@@ -908,6 +1080,13 @@ function TranslationApp() {
 
     socketRef.current.on('reconnect', (attemptNumber) => {
       console.log(`🔄 TranslationApp reconnected after ${attemptNumber} attempts`)
+      setIsConnecting(false)
+      setIsConnected(true)
+      setConnectionQuality('good')
+      lastPongTimeRef.current = Date.now()
+      missedPongCountRef.current = 0
+      awaitingPongRef.current = false
+      clearProactiveRefresh()
     })
 
     socketRef.current.on('reconnect_error', (error) => {
@@ -951,6 +1130,7 @@ function TranslationApp() {
 
     return () => {
       clearReconnectFallback()
+      clearRegistrationRetry()
       hasConnectedOnceRef.current = false
       if (socketRef.current) {
         if ((socketRef.current as any).heartbeatInterval) {
@@ -1172,6 +1352,11 @@ function TranslationApp() {
                 if (targetLanguage) {
                   hasJoinedListeningRef.current = true
                   socketRef.current?.emit('setTargetLanguage', { targetLanguage })
+                  if (socketRef.current?.connected) {
+                    scheduleProactiveReconnect(socketRef.current, () => ({
+                      sessionCode: sessionCodeRef.current,
+                    }))
+                  }
                   setShowLanguageSelection(false)
                 }
               }}
@@ -1198,6 +1383,7 @@ function TranslationApp() {
   return (
     <MainContainer isMobile={isMobile}>
       {isMobile ? (
+        <>
         <MobileHeader elevation={3}>
           <MobileHeaderLeft>
             <BackButton
@@ -1264,6 +1450,10 @@ function TranslationApp() {
             )}
           </MobileHeaderRight>
         </MobileHeader>
+        <Box sx={{ width: '100%', flexShrink: 0, paddingX: '0.25rem' }}>
+          {renderTtsSpeedControl(true)}
+        </Box>
+        </>
       ) : (
         // Desktop Left Panel
         <LeftPanel elevation={3}>
@@ -1349,6 +1539,7 @@ function TranslationApp() {
                   ? 'Translations will be read aloud as they arrive'
                   : 'Enable to hear translations spoken'}
               </Typography>
+              {renderTtsSpeedControl()}
             </Box>
           )}
         </LeftPanel>

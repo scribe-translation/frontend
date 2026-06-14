@@ -599,8 +599,16 @@ function InputApp() {
       }, isReconnect ? 1500 : 0)
     })
 
-    socketRef.current.on('connectionCount', (data: { total: number, byLanguage: Record<string, number> }) => {
-      setConnectionCount(data)
+    socketRef.current.on('connectionCount', (data: {
+      sessionCode?: string
+      total: number
+      byLanguage: Record<string, number>
+    }) => {
+      const currentSessionCode = sessionCodeRef.current
+      if (data.sessionCode && currentSessionCode && data.sessionCode !== currentSessionCode) {
+        return
+      }
+      setConnectionCount({ total: data.total, byLanguage: data.byLanguage })
     })
 
     socketRef.current.on('disconnect', (reason) => {

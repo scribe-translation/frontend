@@ -590,6 +590,7 @@ function TranslationApp() {
 
   const [isConnected, setIsConnected] = useState(false)
   const [isConnecting, setIsConnecting] = useState(false)
+  const [isRegisteredOnServer, setIsRegisteredOnServer] = useState(false)
   const [showLanguageSelection, setShowLanguageSelection] = useState(true)
   const [connectionQuality, setConnectionQuality] = useState<'good' | 'unstable' | 'disconnected'>('good')
 
@@ -604,6 +605,8 @@ function TranslationApp() {
   const registrationRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const registrationAwaitingConfirmRef = useRef(false)
   const registrationRetryCountRef = useRef(0)
+  const beginRegistrationConfirmationRef = useRef<(() => void) | null>(null)
+  const registerWithServerRef = useRef<(() => void) | null>(null)
   const sessionCodeRef = useRef<string | null>(null)
 
   // Keep ref in sync with state for socket handlers
@@ -717,12 +720,26 @@ function TranslationApp() {
     const urlParams = new URLSearchParams(window.location.search)
     const codeFromUrl = urlParams.get('code')
 
-    if (codeFromUrl) {
-      const normalized = normalizeSessionCode(codeFromUrl)
+    const tryValidate = (code: string) => {
+      const normalized = normalizeSessionCode(code)
       setSessionCodeInput(normalized)
-      void validateSessionCode(normalized)
-    } else {
-      resetSessionJoinState()
+      void validateSessionCode(normalized).then((ok) => {
+        if (!ok) {
+          window.setTimeout(() => {
+            void validateSessionCode(normalized)
+          }, 1500)
+        }
+      })
+    }
+
+    if (codeFromUrl) {
+      tryValidate(codeFromUrl)
+      return
+    }
+
+    const storedCode = localStorage.getItem('scribeSessionCode')
+    if (storedCode && isValidSessionCodeFormat(normalizeSessionCode(storedCode))) {
+      tryValidate(storedCode)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
   }, [])
@@ -799,20 +816,26 @@ function TranslationApp() {
         REGISTRATION_CONFIRM_TIMEOUT_MS
       )
     }
+    beginRegistrationConfirmationRef.current = beginRegistrationConfirmation
+
+    registerWithServerRef.current = () => {
+      const lang = targetLanguageRef.current
+      if (!lang || !socketRef.current?.connected) {
+        console.warn('⚠️ Cannot register listener — socket not ready or no language selected')
+        return
+      }
+      console.log(`📡 Registering listener with server: ${lang} → ${CONFIG.BACKEND_URL}`)
+      socketRef.current.emit('setTargetLanguage', { targetLanguage: lang })
+      beginRegistrationConfirmation()
+    }
 
     const restoreListenerSession = (isReconnect: boolean) => {
       if (!hasJoinedListeningRef.current) {
         return
       }
 
-      const currentTargetLanguage = targetLanguageRef.current
-      if (!currentTargetLanguage) {
-        return
-      }
-
-      console.log(`🔗 Re-establishing target language${isReconnect ? ' after reconnect' : ''}: ${currentTargetLanguage}`)
-      socketRef.current?.emit('setTargetLanguage', { targetLanguage: currentTargetLanguage })
-      beginRegistrationConfirmation()
+      console.log(`🔗 Re-establishing target language${isReconnect ? ' after reconnect' : ''}`)
+      registerWithServerRef.current?.()
 
       if (isReconnect) {
         console.log('📬 Requesting missed messages after reconnect')
@@ -1070,6 +1093,7 @@ function TranslationApp() {
       registrationAwaitingConfirmRef.current = false
       registrationRetryCountRef.current = 0
       clearRegistrationRetry()
+      setIsRegisteredOnServer(true)
       console.log(`✅ Listener registered on server: ${data.targetLanguage}`)
     })
 
@@ -1131,6 +1155,8 @@ function TranslationApp() {
     return () => {
       clearReconnectFallback()
       clearRegistrationRetry()
+      beginRegistrationConfirmationRef.current = null
+      registerWithServerRef.current = null
       hasConnectedOnceRef.current = false
       if (socketRef.current) {
         if ((socketRef.current as any).heartbeatInterval) {
@@ -1142,7 +1168,7 @@ function TranslationApp() {
       setIsConnecting(false)
       setIsConnected(false)
     }
-  }, [targetLanguage, sessionCode, sessionCodeValidated, handleSessionCodeAuthFailure])
+  }, [sessionCode, sessionCodeValidated, handleSessionCodeAuthFailure])
 
   // Visibility change handler - verify connection when app returns from background
   useEffect(() => {
@@ -1196,10 +1222,26 @@ function TranslationApp() {
   }, [])
 
   useEffect(() => {
-    if (socketRef.current && isConnected && targetLanguage && !showLanguageSelection) {
-      socketRef.current.emit('setTargetLanguage', { targetLanguage })
+    if (!isConnected || showLanguageSelection || !targetLanguage) {
+      return
+    }
+    if (hasJoinedListeningRef.current) {
+      registerWithServerRef.current?.()
     }
   }, [targetLanguage, isConnected, showLanguageSelection])
+
+  // Keep listener registration alive while listening
+  useEffect(() => {
+    if (!isConnected || showLanguageSelection || !hasJoinedListeningRef.current) {
+      return
+    }
+    const intervalId = setInterval(() => {
+      if (hasJoinedListeningRef.current && !isRegisteredOnServer) {
+        registerWithServerRef.current?.()
+      }
+    }, 10000)
+    return () => clearInterval(intervalId)
+  }, [isConnected, showLanguageSelection, isRegisteredOnServer])
 
 
   const handleBackToLanguageSelection = () => {
@@ -1207,6 +1249,7 @@ function TranslationApp() {
     // Reset to saved language or default
     setTargetLanguage(getInitialTargetLanguage())
     setTranslationBubbles([])
+    setIsRegisteredOnServer(false)
     // Clear deduplication set
     processedTranslationsRef.current.clear()
     // Clear target language on server (removes this client from listener list)
@@ -1214,6 +1257,19 @@ function TranslationApp() {
     if (socketRef.current?.connected) {
       socketRef.current.emit('clearTargetLanguage')
     }
+  }
+
+  const getConnectionStatusLabel = () => {
+    if (isConnecting) return null
+    if (!isConnected) return 'Disconnected'
+    if (isRegisteredOnServer) return 'Listening'
+    return 'Registering...'
+  }
+
+  const getConnectionStatusColor = (): 'success' | 'error' | 'warning' => {
+    if (!isConnected) return 'error'
+    if (isRegisteredOnServer) return 'success'
+    return 'warning'
   }
 
   if (!sessionCodeValidated || sessionCodeValidationError) {
@@ -1351,16 +1407,12 @@ function TranslationApp() {
               onClick={() => {
                 if (targetLanguage) {
                   hasJoinedListeningRef.current = true
-                  socketRef.current?.emit('setTargetLanguage', { targetLanguage })
-                  if (socketRef.current?.connected) {
-                    scheduleProactiveReconnect(socketRef.current, () => ({
-                      sessionCode: sessionCodeRef.current,
-                    }))
-                  }
                   setShowLanguageSelection(false)
+                  setIsRegisteredOnServer(false)
+                  window.setTimeout(() => registerWithServerRef.current?.(), 0)
                 }
               }}
-              disabled={!targetLanguage}
+              disabled={!targetLanguage || !isConnected}
               sx={{
                 borderRadius: '1rem',
                 padding: '0.5rem',
@@ -1374,6 +1426,11 @@ function TranslationApp() {
             >
               Start Listening
             </StartButton>
+            {!isConnected && (
+              <Typography variant="captionText" sx={{ textAlign: 'center', color: 'warning.main', fontSize: '0.85rem' }}>
+                Waiting for server connection…
+              </Typography>
+            )}
           </LanguageSelectionSection>
         </LandingCard>
       </LandingPageContainer>
@@ -1442,8 +1499,8 @@ function TranslationApp() {
               </Box>
             ) : (
               <Chip
-                label={isConnected ? 'Connected' : 'Disconnected'}
-                color={isConnected ? 'success' : 'error'}
+                label={getConnectionStatusLabel()}
+                color={getConnectionStatusColor()}
                 variant="outlined"
                 size="small"
               />
@@ -1494,8 +1551,8 @@ function TranslationApp() {
               </Box>
             ) : (
               <Chip
-                label={isConnected ? 'Connected' : 'Disconnected'}
-                color={isConnected ? 'success' : 'error'}
+                label={getConnectionStatusLabel()}
+                color={getConnectionStatusColor()}
                 variant="outlined"
               />
             )}

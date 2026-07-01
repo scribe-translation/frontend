@@ -20,12 +20,18 @@ import StopIcon from '@mui/icons-material/Stop';
 import { useNavigate } from 'react-router-dom';
 import { io, Socket } from 'socket.io-client'
 import styled, { keyframes } from 'styled-components'
-import { CONFIG } from '../../config/urls'
+import { CONFIG, getListenerJoinUrl } from '../../config/urls'
+import QRCode from 'qrcode'
 import { useAuth } from '../../contexts/AuthContext'
 import { useSessionCode } from '../../contexts/SessionContext'
 // ProfileModal removed in favor of full page /profile
 import googleSpeechService from '../../services/googleSpeechService'
 import { setCookie, getCookie } from '../../utils/cookieUtils'
+import {
+  loadSavedInputDevice,
+  saveInputDevice,
+  type SavedInputDevice,
+} from '../../utils/inputDevicePrefs'
 import { createHybridFlagElement } from '../../utils/flagEmojiUtils.tsx'
 import { useWakeLock } from '../../utils/useWakeLock'
 import { isRTLLanguage } from '../../utils/rtlUtils'
@@ -327,7 +333,28 @@ function InputApp() {
     }
   }, [recordingPrefs, isSocketConnected])
   const [connectionInfo, setConnectionInfo] = useState<{ sessionCode: string, connectionUrl: string, qrCodeUrl: string, shareText: string } | null>(null)
-  const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null)
+
+  const initialSavedDevice = loadSavedInputDevice()
+  const [savedInputDevice, setSavedInputDevice] = useState<SavedInputDevice | null>(
+    initialSavedDevice
+  )
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(
+    initialSavedDevice?.deviceId ?? null
+  )
+
+  const handleDeviceResolved = useCallback((deviceId: string) => {
+    setSelectedDeviceId(deviceId)
+  }, [])
+
+  const handleDeviceChange = useCallback((deviceId: string, label: string) => {
+    setSelectedDeviceId(deviceId)
+    const saved: SavedInputDevice = { deviceId, label }
+    setSavedInputDevice(saved)
+    saveInputDevice(deviceId, label)
+    if (googleSpeechService.isMicrophoneReady() && !isTranslating) {
+      googleSpeechService.releaseMicrophone()
+    }
+  }, [isTranslating])
   const [speechConfig, setSpeechConfig] = useState({
     speechEndTimeout: 1, // Balanced timeout for natural speech patterns
     maxWordsPerBubble: 15,
@@ -405,7 +432,14 @@ function InputApp() {
       const fetchConnectionInfo = async () => {
         try {
           const info = await getConnectionInfo()
-          setConnectionInfo(info)
+          const connectionUrl = getListenerJoinUrl(info.sessionCode)
+          const qrCodeUrl = await QRCode.toDataURL(connectionUrl)
+          setConnectionInfo({
+            ...info,
+            connectionUrl,
+            qrCodeUrl,
+            shareText: `Join my Scribe session: ${connectionUrl}`
+          })
         } catch (error) {
           console.error('Failed to fetch connection info:', error)
         }
@@ -1045,28 +1079,30 @@ function InputApp() {
   }, [startGoogleSpeechRecognition])
 
   const stopGoogleSpeechRecognition = useCallback(() => {
-    // If there's current interim transcription, submit it as final
-    if (currentTranscription.trim()) {
-      const uniqueId = `interim-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const displayedText = currentTranscription.trim()
+    const pendingInService = googleSpeechService.hasPendingTranscript()
+
+    // Fallback when UI still has text but the service transcript was cleared (desync).
+    // When the service has pending text, stopRecognition() flushes via sendManualFinal.
+    if (displayedText && !pendingInService) {
+      const uniqueId = `interim-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
       const newBubble: MessageBubble = {
         id: uniqueId,
-        text: currentTranscription,
+        text: displayedText,
         timestamp: new Date(),
         isComplete: false
       }
 
       setTranscriptionBubbles(prev => [...prev, newBubble])
 
-      // Send to backend for translation and distribution to listeners
       if (socketRef.current && isSocketConnected) {
         socketRef.current.emit('speechTranscription', {
-          transcription: currentTranscription,
+          transcription: displayedText,
           sourceLanguage: sourceLanguage,
           bubbleId: uniqueId
         })
       }
 
-      // Mark as complete after a short delay
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current)
       }
@@ -1081,9 +1117,7 @@ function InputApp() {
       }, 250)
     }
 
-    // Reset current transcription
     setCurrentTranscription('')
-
     googleSpeechService.stopRecognition()
     setIsTranslating(false)
   }, [currentTranscription, socketRef, isSocketConnected, sourceLanguage])
@@ -1205,7 +1239,9 @@ function InputApp() {
               <Box sx={{ backgroundColor: 'rgba(255, 255, 255, 0.05)', borderRadius: '1rem', padding: '1rem' }}>
                 <DeviceSelector
                   selectedDeviceId={selectedDeviceId}
-                  onDeviceChange={setSelectedDeviceId}
+                  savedDevice={savedInputDevice}
+                  onDeviceChange={handleDeviceChange}
+                  onDeviceResolved={handleDeviceResolved}
                   disabled={isTranslating}
                   micAccessResetKey={micAccessResetKey}
                 />
@@ -1374,7 +1410,9 @@ function InputApp() {
           <Box sx={{ marginTop: '1rem', padding: '1rem', backgroundColor: 'rgba(255, 255, 255, 0.05)', borderRadius: '1rem' }}>
             <DeviceSelector
               selectedDeviceId={selectedDeviceId}
-              onDeviceChange={setSelectedDeviceId}
+              savedDevice={savedInputDevice}
+              onDeviceChange={handleDeviceChange}
+              onDeviceResolved={handleDeviceResolved}
               disabled={isTranslating}
               micAccessResetKey={micAccessResetKey}
             />

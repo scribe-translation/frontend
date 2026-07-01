@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import {
   FormControl,
   InputLabel,
@@ -17,6 +17,7 @@ import {
   DISPLAY_MEDIA_DEVICE_LABEL,
   isDisplayMediaCaptureSupported,
 } from '../../utils/audioInputDevices'
+import { findMatchingDevice, type SavedInputDevice } from '../../utils/inputDevicePrefs'
 
 interface AudioDevice {
   deviceId: string
@@ -27,7 +28,9 @@ interface AudioDevice {
 
 interface DeviceSelectorProps {
   selectedDeviceId: string | null
-  onDeviceChange: (deviceId: string) => void
+  savedDevice: SavedInputDevice | null
+  onDeviceChange: (deviceId: string, label: string) => void
+  onDeviceResolved: (deviceId: string) => void
   disabled?: boolean
   micAccessResetKey?: number
 }
@@ -40,19 +43,40 @@ const PLACEHOLDER_DEVICE: AudioDevice = {
 
 const DeviceSelector: React.FC<DeviceSelectorProps> = ({
   selectedDeviceId,
+  savedDevice,
   onDeviceChange,
+  onDeviceResolved,
   disabled = false,
   micAccessResetKey = 0,
 }) => {
   const [devices, setDevices] = useState<AudioDevice[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [hasDeviceAccess, setHasDeviceAccess] = useState(false)
+  const savedDeviceRef = useRef(savedDevice)
+
   const displayMediaSupported = isDisplayMediaCaptureSupported()
+
+  useEffect(() => {
+    savedDeviceRef.current = savedDevice
+  }, [savedDevice])
 
   useEffect(() => {
     setHasDeviceAccess(false)
     setDevices([])
   }, [micAccessResetKey])
+
+  const resolveDeviceSelection = (allDevices: AudioDevice[]) => {
+    const matched = findMatchingDevice(allDevices, savedDeviceRef.current)
+
+    if (matched) {
+      onDeviceResolved(matched.deviceId)
+      return
+    }
+
+    if (allDevices.length > 0) {
+      onDeviceResolved(allDevices[0].deviceId)
+    }
+  }
 
   const getAudioDevices = async () => {
     setIsLoading(true)
@@ -91,10 +115,7 @@ const DeviceSelector: React.FC<DeviceSelectorProps> = ({
 
       setDevices(allDevices)
       setHasDeviceAccess(true)
-
-      if (!selectedDeviceId) {
-        onDeviceChange(allDevices[0].deviceId)
-      }
+      resolveDeviceSelection(allDevices)
     } catch (error) {
       console.error('Error accessing audio devices:', error)
 
@@ -107,9 +128,7 @@ const DeviceSelector: React.FC<DeviceSelectorProps> = ({
         }]
         setDevices(displayOnly)
         setHasDeviceAccess(true)
-        if (!selectedDeviceId) {
-          onDeviceChange(DISPLAY_MEDIA_AUDIO_DEVICE_ID)
-        }
+        resolveDeviceSelection(displayOnly)
       } else {
         setDevices([])
         setHasDeviceAccess(false)
@@ -129,11 +148,14 @@ const DeviceSelector: React.FC<DeviceSelectorProps> = ({
     getAudioDevices()
   }
 
-  const handleDeviceChange = (event: { target: { value: string } }) => {
+  const handleSelectChange = (event: { target: { value: string } }) => {
     const deviceId = event.target.value
-    if (deviceId) {
-      onDeviceChange(deviceId)
+    if (!deviceId) {
+      return
     }
+    const device = devices.find((d) => d.deviceId === deviceId)
+    const label = device?.label ?? deviceId
+    onDeviceChange(deviceId, label)
   }
 
   const displayDevices =
@@ -159,7 +181,7 @@ const DeviceSelector: React.FC<DeviceSelectorProps> = ({
         <Select
           labelId="device-selector-label"
           value={selectedDeviceId || ''}
-          onChange={handleDeviceChange}
+          onChange={handleSelectChange}
           label={inputLabel}
           sx={{
             '& .MuiSelect-select': {

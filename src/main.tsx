@@ -16,33 +16,50 @@ import './index.css'
 const App = () => {
   const hostname = window.location.hostname
   const subdomain = hostname.split('.')[0]
+  const isDev = import.meta.env.VITE_NODE_ENV === 'dev'
+  const isPlainLocalDevHost =
+    hostname === 'localhost' ||
+    hostname === '127.0.0.1' ||
+    /^\d+\.\d+\.\d+\.\d+$/.test(hostname)
   
   // Check if there's a reset token in the URL
   const urlParams = new URLSearchParams(window.location.search);
   const hasResetToken = urlParams.get('token') !== null;
+
+  const speakerRoutes = (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/reset-password" element={<ResetPasswordPage />} />
+        <Route path="*" element={
+          <ProtectedRoute fallback={<AuthPage />}>
+            <SpeakerShell />
+          </ProtectedRoute>
+        } />
+      </Routes>
+    </BrowserRouter>
+  )
+
+  const listenerRoutes = (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/reset-password" element={<ResetPasswordPage />} />
+        <Route path="*" element={<TranslationApp />} />
+      </Routes>
+    </BrowserRouter>
+  )
   
   if (subdomain === 'speaker') {
-    return (
-      <BrowserRouter>
-        <Routes>
-          <Route path="/reset-password" element={<ResetPasswordPage />} />
-          <Route path="*" element={
-            <ProtectedRoute fallback={<AuthPage />}>
-              <SpeakerShell />
-            </ProtectedRoute>
-          } />
-        </Routes>
-      </BrowserRouter>
-    )
+    return speakerRoutes
   } else if (subdomain === 'listener') {
-    return (
-      <BrowserRouter>
-        <Routes>
-          <Route path="/reset-password" element={<ResetPasswordPage />} />
-          <Route path="*" element={<TranslationApp />} />
-        </Routes>
-      </BrowserRouter>
-    )
+    return listenerRoutes
+  } else if (isDev && isPlainLocalDevHost) {
+    // Dev fallback: http://localhost:5173/ or http://10.x.x.x:5173/ → listener
+    // http://localhost:5173/speaker → speaker (requires /etc/hosts subdomains in prod-like dev)
+    const path = window.location.pathname
+    if (path.startsWith('/speaker')) {
+      return speakerRoutes
+    }
+    return listenerRoutes
   } else if (hasResetToken) {
     // Allow reset-password on main domain if there's a token
     return (

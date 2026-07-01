@@ -124,6 +124,10 @@ class GoogleSpeechService {
     );
   }
 
+  hasPendingTranscript(): boolean {
+    return this.currentTranscript.trim().length > 0;
+  }
+
   /** Rebind socket listeners without stopping the microphone pipeline. */
   async reattachSocket(socket: any): Promise<void> {
     await this.initialize(socket);
@@ -189,6 +193,9 @@ class GoogleSpeechService {
             this.lastSpeechTime = Date.now();
             this.lastInterimResultTime = Date.now();
             this.silenceStartTime = null;
+            if (incoming) {
+              this.hasReceivedFinalResult = false;
+            }
 
             this.callbacks.onInterimResult({
               transcript: data.transcript,
@@ -247,39 +254,7 @@ class GoogleSpeechService {
         const finalBubbleId = this.currentBubbleId || this.generateBubbleId();
 
         if (finalTranscript) {
-          this.lastClientFinalizedBubbleId = finalBubbleId;
-
-          if (this.socket && this.socket.connected) {
-            this.socket.emit('googleSpeechTranscription', {
-              audioData: '',
-              sourceLanguage: this.config.languageCode,
-              bubbleId: finalBubbleId,
-              isFinal: true,
-              interimTranscript: '',
-              finalTranscript: finalTranscript,
-              wordCount: this.currentWordCount,
-              maxWordsPerBubble: this.config.maxWordsPerBubble,
-              audioFormat: 'LINEAR16',
-              sampleRate: 48000
-            });
-          }
-
-          if (this.callbacks?.onFinalResult) {
-            this.callbacks.onFinalResult({
-              transcript: finalTranscript,
-              isFinal: true,
-              confidence: 0.8,
-              wordCount: this.currentWordCount,
-              bubbleId: finalBubbleId
-            });
-          }
-
-          this.currentTranscript = '';
-          this.currentBubbleId = this.generateBubbleId();
-          this.currentWordCount = 0;
-          this.lastSpeechTime = Date.now();
-          this.silenceStartTime = null;
-          this.hasReceivedFinalResult = false;
+          this.sendManualFinal(finalTranscript, finalBubbleId, 0.8);
         }
 
         this.socket?.emit('forceFinalizeAck', {});
@@ -696,6 +671,12 @@ class GoogleSpeechService {
       return;
     }
 
+    if (this.hasPendingTranscript()) {
+      const finalTranscript = this.currentTranscript.trim();
+      const finalBubbleId = this.currentBubbleId || this.generateBubbleId();
+      this.sendManualFinal(finalTranscript, finalBubbleId, 0.8);
+    }
+
     this.isRecording = false;
     this.isPaused = false;
     this.clearTimers();
@@ -1056,6 +1037,55 @@ class GoogleSpeechService {
   }
   
   /**
+   * Send a manual final transcript to the backend and update local/UI state.
+   */
+  private sendManualFinal(
+    finalTranscript: string,
+    finalBubbleId: string,
+    confidence: number
+  ): void {
+    const trimmed = finalTranscript.trim();
+    if (!trimmed) {
+      return;
+    }
+
+    this.lastClientFinalizedBubbleId = finalBubbleId;
+
+    if (this.socket && this.socket.connected) {
+      this.socket.emit('googleSpeechTranscription', {
+        audioData: '',
+        sourceLanguage: this.config.languageCode,
+        bubbleId: finalBubbleId,
+        isFinal: true,
+        interimTranscript: '',
+        finalTranscript: trimmed,
+        wordCount: this.currentWordCount,
+        maxWordsPerBubble: this.config.maxWordsPerBubble,
+        audioFormat: 'LINEAR16',
+        sampleRate: 48000
+      });
+    } else {
+      console.warn('⚠️ Cannot send manual final: socket not connected');
+    }
+
+    if (this.callbacks?.onFinalResult) {
+      this.callbacks.onFinalResult({
+        transcript: trimmed,
+        isFinal: true,
+        confidence,
+        wordCount: this.currentWordCount,
+        bubbleId: finalBubbleId
+      });
+    }
+
+    this.currentTranscript = '';
+    this.currentWordCount = 0;
+    this.lastSpeechTime = Date.now();
+    this.silenceStartTime = null;
+    this.hasReceivedFinalResult = false;
+  }
+
+  /**
    * Start silence detection for automatic finalization
    * This helps detect when speech has ended, especially on mobile devices
    */
@@ -1091,42 +1121,7 @@ class GoogleSpeechService {
             !this.hasReceivedFinalResult) {
           const finalTranscript = this.currentTranscript.trim();
           const finalBubbleId = this.currentBubbleId || this.generateBubbleId();
-          this.lastClientFinalizedBubbleId = finalBubbleId;
-
-          // Send final transcript to backend
-          if (this.socket && this.socket.connected) {
-            this.socket.emit('googleSpeechTranscription', {
-              audioData: '', // No audio data for final-only message
-              sourceLanguage: this.config.languageCode,
-              bubbleId: finalBubbleId,
-              isFinal: true,
-              interimTranscript: '',
-              finalTranscript: finalTranscript,
-              wordCount: this.currentWordCount,
-              maxWordsPerBubble: this.config.maxWordsPerBubble,
-              audioFormat: 'LINEAR16',
-              sampleRate: 48000
-            });
-          }
-          
-          // Create a final result from the current transcript
-          if (this.callbacks?.onFinalResult) {
-            this.callbacks.onFinalResult({
-              transcript: finalTranscript,
-              isFinal: true,
-              confidence: 0.8, // Default confidence for silence-triggered finalization
-              wordCount: this.currentWordCount,
-              bubbleId: finalBubbleId
-            });
-          }
-          
-          // Reset state
-          this.currentTranscript = '';
-          this.currentBubbleId = this.generateBubbleId();
-          this.currentWordCount = 0;
-          this.lastSpeechTime = Date.now();
-          this.silenceStartTime = null;
-          this.hasReceivedFinalResult = false;
+          this.sendManualFinal(finalTranscript, finalBubbleId, 0.8);
         }
       }
     };

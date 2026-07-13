@@ -16,6 +16,7 @@ import { createHybridFlagElement } from '../../utils/flagEmojiUtils.tsx'
 import { useWakeLock } from '../../utils/useWakeLock'
 import TypingIndicator from '../UI/TypingIndicator'
 import { isRTLLanguage } from '../../utils/rtlUtils'
+import { captureFlipTops, playFlip } from '../../utils/flipAnimate'
 import {
   getSessionCodeErrorMessage,
   isSessionCodeAuthError,
@@ -336,11 +337,16 @@ function TranslationApp() {
   const bubblesContainerRef = useRef<HTMLDivElement>(null)
   const bubblesListRef = useRef<HTMLDivElement>(null)
   const shouldAutoScrollRef = useRef(true)
+  const previousBubbleTopsRef = useRef<Map<string, number>>(new Map())
 
-  const scrollToBottom = useCallback(() => {
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
     const el = bubblesContainerRef.current
     if (!el) return
-    el.scrollTop = el.scrollHeight
+    if (behavior === 'smooth') {
+      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+    } else {
+      el.scrollTop = el.scrollHeight
+    }
   }, [])
 
   const handleBubblesScroll = useCallback(() => {
@@ -351,8 +357,21 @@ function TranslationApp() {
   }, [])
 
   useLayoutEffect(() => {
+    const listEl = bubblesListRef.current
+
+    // Pin to bottom before measuring so FLIP deltas match the final viewport
     if (shouldAutoScrollRef.current) {
-      scrollToBottom()
+      scrollToBottom('auto')
+    }
+
+    // Capture layout tops before FLIP applies temporary transforms
+    const nextTops = captureFlipTops(listEl)
+    playFlip(listEl, previousBubbleTopsRef.current)
+    previousBubbleTopsRef.current = nextTops
+
+    if (shouldAutoScrollRef.current) {
+      // Soft follow after layout animation settles into the new height
+      scrollToBottom('smooth')
     }
   }, [translationBubbles, interimText, isSpeakerTyping, scrollToBottom])
 
@@ -362,7 +381,7 @@ function TranslationApp() {
 
     const observer = new ResizeObserver(() => {
       if (shouldAutoScrollRef.current) {
-        scrollToBottom()
+        scrollToBottom('smooth')
       }
     })
     observer.observe(listEl)
@@ -970,6 +989,9 @@ function TranslationApp() {
       setIsSpeakerTyping(data.isTyping)
       if (data.translatedInterimText) {
         setInterimText(data.translatedInterimText)
+      } else {
+        // Flag-off / dots-only path — clear any leftover interim text
+        setInterimText(null)
       }
     })
 
@@ -1619,6 +1641,7 @@ function TranslationApp() {
                 {translationBubbles.map((bubble) => (
                   <MessageBubble
                     key={bubble.id}
+                    data-flip-id={bubble.id}
                     elevation={3}
                     isRTL={isRTLLanguage(bubble.targetLanguage)}
                   >
@@ -1629,6 +1652,7 @@ function TranslationApp() {
                 ))}
                 <TypingIndicatorSlot $active={isSpeakerTyping}>
                   <MessageBubble
+                    data-flip-id="typing-indicator"
                     elevation={1}
                     isRTL={isRTLLanguage(targetLanguage)}
                     sx={{ opacity: 0.7, animation: 'none' }}

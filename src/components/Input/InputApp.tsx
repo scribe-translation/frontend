@@ -11,6 +11,7 @@ import DownloadIcon from '@mui/icons-material/Download'
 import LogoutIcon from '@mui/icons-material/Logout'
 import QrCodeIcon from '@mui/icons-material/QrCode'
 import AccountBoxIcon from '@mui/icons-material/AccountBox';
+import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import DescriptionIcon from '@mui/icons-material/Description';
 import FacebookIcon from '@mui/icons-material/Facebook';
 import SaveIcon from '@mui/icons-material/Save';
@@ -1189,6 +1190,22 @@ function InputApp() {
               <Typography sx={{ color: '#E2EDF8', fontSize: 14, fontWeight: 600 }}>Recording Settings</Typography>
               <ExpandMoreIcon sx={{ color: '#E2EDF8', transform: settingsExpanded ? 'rotate(180deg)' : 'none', transition: '0.3s' }} />
             </Box>
+            {user?.isAdmin && (
+              <IconButton
+                onClick={() => navigate('/admin')}
+                aria-label="Admin dashboard"
+                sx={{
+                  backgroundColor: '#435A73',
+                  borderRadius: '14px',
+                  height: '48px',
+                  width: '48px',
+                  flexShrink: 0,
+                  '&:hover': { backgroundColor: '#3A5068' },
+                }}
+              >
+                <AdminPanelSettingsIcon sx={{ color: '#D7E4F2' }} />
+              </IconButton>
+            )}
             <Button
               disabled={!isServiceReady}
               onClick={() => {
@@ -1323,6 +1340,23 @@ function InputApp() {
                 </Typography>
               </Box>
             </Tooltip>
+            {user?.isAdmin && (
+              <Tooltip title="Admin dashboard" arrow placement="bottom">
+                <IconButton
+                  onClick={() => navigate('/admin')}
+                  color="primary"
+                  sx={{
+                    borderRadius: '50%',
+                    padding: '0.5rem',
+                    '&:hover': {
+                      backgroundColor: 'rgba(210, 180, 140, 0.1)',
+                    },
+                  }}
+                >
+                  <AdminPanelSettingsIcon />
+                </IconButton>
+              </Tooltip>
+            )}
             <IconButton
               onClick={logout}
               color="primary"

@@ -12,6 +12,7 @@ interface User {
   totpEnabled?: boolean
   totalSessions?: number
   totalUsageMinutes?: number
+  isAdmin?: boolean
 }
 
 interface AuthTokens {

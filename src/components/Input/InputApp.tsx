@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import InputLanguageSelector from '../InputLanguageSelector'
 import DeviceSelector from './DeviceSelector'
 import RecordingPreferences from './RecordingPreferences'
@@ -22,8 +22,8 @@ import { useNavigate } from 'react-router-dom';
 import { io, Socket } from 'socket.io-client'
 import styled, { keyframes } from 'styled-components'
 import { CONFIG, getListenerJoinUrl } from '../../config/urls'
-import QRCode from 'qrcode'
 import { useAuth } from '../../contexts/AuthContext'
+import { AudienceQrCode, downloadAudienceQr } from './AudienceQrCode'
 import { useSessionCode } from '../../contexts/SessionContext'
 // ProfileModal removed in favor of full page /profile
 import googleSpeechService from '../../services/googleSpeechService'
@@ -153,12 +153,13 @@ const QRCodeSection = styled.div`
 `
 
 const QRCodeContainer = styled.div`
-  background: white;
-  padding: 1rem;
-  border-radius: 0.5rem;
+  background: #2C3E50;
+  border-radius: 1.25rem;
   display: flex;
   justify-content: center;
   align-items: center;
+  overflow: hidden;
+  line-height: 0;
 `
 
 const bubbleEnter = keyframes`
@@ -370,7 +371,6 @@ function InputApp() {
   const [connectionQuality, setConnectionQuality] = useState<'good' | 'unstable' | 'disconnected'>('good')
   const socketRef = React.useRef<Socket | null>(null)
   const timeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
-  const qrCodeRef = useRef<HTMLDivElement>(null)
   const currentTranscriptionRef = React.useRef<string>('') // Ref to track current transcription for stream restart handler
   const sourceLanguageRef = React.useRef<string>('en-CA') // Ref to track source language for stream restart handler
 
@@ -434,11 +434,9 @@ function InputApp() {
         try {
           const info = await getConnectionInfo()
           const connectionUrl = getListenerJoinUrl(info.sessionCode)
-          const qrCodeUrl = await QRCode.toDataURL(connectionUrl)
           setConnectionInfo({
             ...info,
             connectionUrl,
-            qrCodeUrl,
             shareText: `Join my Scribe session: ${connectionUrl}`
           })
         } catch (error) {
@@ -1132,13 +1130,8 @@ function InputApp() {
 
 
   const downloadQRCode = () => {
-    if (connectionInfo?.qrCodeUrl) {
-      const link = document.createElement('a')
-      link.href = connectionInfo.qrCodeUrl
-      link.download = 'scribe-translation-qr.png'
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
+    if (connectionInfo?.connectionUrl) {
+      void downloadAudienceQr(connectionInfo.connectionUrl)
     }
   }
 
@@ -1543,22 +1536,18 @@ function InputApp() {
             <Typography variant="captionText" sx={{ textAlign: 'center' }}>
               Share this QR code with your audience
             </Typography>
-            <QRCodeContainer ref={qrCodeRef}>
+            <QRCodeContainer>
               {connectionInfo ? (
-                <img
-                  src={connectionInfo.qrCodeUrl}
-                  alt="QR Code"
-                  style={{ width: 120, height: 120 }}
-                />
+                <AudienceQrCode url={connectionInfo.connectionUrl} size={200} />
               ) : (
                 <Box sx={{
-                  width: 120,
-                  height: 120,
+                  width: 200,
+                  height: 200,
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  backgroundColor: 'rgba(255, 255, 255, 0.1)',
-                  borderRadius: '8px'
+                  backgroundColor: '#2C3E50',
+                  borderRadius: '1.25rem'
                 }}>
                   <Typography variant="captionText">Generating...</Typography>
                 </Box>
@@ -1637,22 +1626,18 @@ function InputApp() {
             Share this QR code with your audience
           </Typography>
 
-          <Box ref={qrCodeRef} sx={{ marginBottom: '1.5rem' }}>
+          <Box sx={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'center' }}>
             {connectionInfo ? (
-              <img
-                src={connectionInfo.qrCodeUrl}
-                alt="QR Code"
-                style={{ width: 200, height: 200 }}
-              />
+              <AudienceQrCode url={connectionInfo.connectionUrl} size={240} />
             ) : (
               <Box sx={{
-                width: 200,
-                height: 200,
+                width: 240,
+                height: 240,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                backgroundColor: 'rgba(255, 255, 255, 0.1)',
-                borderRadius: '8px'
+                backgroundColor: '#2C3E50',
+                borderRadius: '1.25rem'
               }}>
                 <Typography variant="bodyText">Generating...</Typography>
               </Box>

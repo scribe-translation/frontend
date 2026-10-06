@@ -13,7 +13,6 @@ import QrCodeIcon from '@mui/icons-material/QrCode'
 import AccountBoxIcon from '@mui/icons-material/AccountBox';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import DescriptionIcon from '@mui/icons-material/Description';
-import FacebookIcon from '@mui/icons-material/Facebook';
 import SaveIcon from '@mui/icons-material/Save';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
@@ -319,10 +318,20 @@ function InputApp() {
   // Recording preferences state (per-session, initialized from localStorage)
   const [recordingPrefs, setRecordingPrefs] = useState(() => {
     const saved = localStorage.getItem('scribe_recording_prefs')
-    return saved ? JSON.parse(saved) : {
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved)
+        return {
+          storeText: parsed.storeText !== false,
+          generateSummary: parsed.generateSummary !== false
+        }
+      } catch {
+        // fall through to defaults
+      }
+    }
+    return {
       storeText: true,
-      generateSummary: true,
-      generateFacebookPost: true
+      generateSummary: true
     }
   })
 
@@ -922,6 +931,8 @@ function InputApp() {
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current)
       }
+      // Flush pending transcript while the socket is still connected, then disconnect.
+      googleSpeechService.cleanup()
       if (socketRef.current) {
         socketRef.current.removeAllListeners()
         if ((socketRef.current as any).connectionCountInterval) {
@@ -929,7 +940,6 @@ function InputApp() {
         }
         socketRef.current.disconnect()
       }
-      googleSpeechService.cleanup()
     }
   }, [])
 
@@ -1712,16 +1722,6 @@ function InputApp() {
                 <Typography variant="bodyText" sx={{ fontWeight: 'bold' }}>AI Summary</Typography>
                 <Typography variant="captionText">
                   {recordingPrefs.generateSummary && recordingPrefs.storeText ? "An AI summary will be generated." : "No summary will be created."}
-                </Typography>
-              </Box>
-            </Box>
-            
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: '1rem', opacity: recordingPrefs.storeText ? 1 : 0.5 }}>
-              <FacebookIcon color={recordingPrefs.generateFacebookPost && recordingPrefs.storeText ? "primary" : "disabled"} />
-              <Box>
-                <Typography variant="bodyText" sx={{ fontWeight: 'bold' }}>Facebook Post</Typography>
-                <Typography variant="captionText">
-                  {recordingPrefs.generateFacebookPost && recordingPrefs.storeText ? "A Facebook post draft will be generated." : "No post draft will be created."}
                 </Typography>
               </Box>
             </Box>

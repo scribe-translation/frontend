@@ -580,6 +580,12 @@ class GoogleSpeechService {
       return;
     }
 
+    if (this.hasPendingTranscript()) {
+      const finalTranscript = this.currentTranscript.trim();
+      const finalBubbleId = this.currentBubbleId || this.generateBubbleId();
+      this.sendManualFinal(finalTranscript, finalBubbleId, 0.8);
+    }
+
     this.isRecording = false;
     this.isPaused = false;
     this.clearTimers();

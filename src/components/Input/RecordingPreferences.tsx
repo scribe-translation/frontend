@@ -4,7 +4,6 @@ import { Box, Typography, FormGroup, FormControlLabel, Checkbox } from '@mui/mat
 export interface RecordingPrefs {
   storeText: boolean;
   generateSummary: boolean;
-  generateFacebookPost: boolean;
 }
 
 interface RecordingPreferencesProps {
@@ -39,17 +38,6 @@ const RecordingPreferences: React.FC<RecordingPreferencesProps> = ({ recordingPr
             />
           } 
           label={<Typography variant="bodyText" sx={{ fontSize: '0.85rem' }}>Generate Summary</Typography>}
-        />
-        <FormControlLabel 
-          control={
-            <Checkbox 
-              size="small" 
-              checked={recordingPrefs.generateFacebookPost} 
-              disabled={!recordingPrefs.storeText}
-              onChange={(e) => setRecordingPrefs({...recordingPrefs, generateFacebookPost: e.target.checked})}
-            />
-          } 
-          label={<Typography variant="bodyText" sx={{ fontSize: '0.85rem' }}>FB Post Draft</Typography>}
         />
       </FormGroup>
     </Box>

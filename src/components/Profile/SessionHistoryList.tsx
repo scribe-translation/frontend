@@ -34,7 +34,6 @@ interface Session {
   id: string
   fullText: string
   summary?: string
-  facebookPost?: string
   sourceLanguage: string
   createdAt: string
 }
@@ -82,7 +81,7 @@ const Subsection = ({ title, content, icon, defaultExpanded = false }: { title: 
           borderRadius: '0.5rem',
           borderLeft: '3px solid rgba(155, 181, 209, 0.5)'
         }}>
-          <Typography variant="bodyText" sx={{ fontSize: '0.95rem', whiteSpace: 'pre-wrap' }}>
+          <Typography variant="bodyText" sx={{ fontSize: '0.95rem', whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>
             {content}
           </Typography>
         </Box>
@@ -206,21 +205,25 @@ const SessionHistoryList: React.FC = () => {
         doc.setFont('helvetica', 'normal')
         doc.setTextColor(0, 0, 0)
         
-        const splitText = doc.splitTextToSize(text, 170)
+        // Preserve bubble newlines from stored transcripts, then wrap long lines.
+        const lines = text.split('\n').flatMap((paragraph) =>
+          paragraph.trim().length === 0 ? [''] : doc.splitTextToSize(paragraph, 170)
+        )
         
-        for (let i = 0; i < splitText.length; i++) {
+        for (let i = 0; i < lines.length; i++) {
           if (cursorY > 280) {
             doc.addPage()
             cursorY = 20
           }
-          doc.text(splitText[i], 20, cursorY)
+          if (lines[i]) {
+            doc.text(lines[i], 20, cursorY)
+          }
           cursorY += 6
         }
         cursorY += 9 // Extra padding after section
       }
       
       addSection('SUMMARY', session.summary || 'No summary generated')
-      addSection('FACEBOOK POST DRAFT', session.facebookPost || 'No FB post generated')
       addSection('FULL TRANSCRIPTION', session.fullText)
       
       // Footer
@@ -297,7 +300,6 @@ const SessionHistoryList: React.FC = () => {
             <Divider sx={{ marginBottom: '1.5rem', opacity: 0.1 }} />
             
             <Subsection title="Summary" content={session.summary} defaultExpanded={true} />
-            <Subsection title="Facebook Post" content={session.facebookPost} />
             <Subsection title="Full Transcription Text" content={session.fullText} />
             
             <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem', marginTop: '1rem' }}>

@@ -11,6 +11,7 @@ import {
   getDisplayMediaErrorMessage,
   isDisplayMediaAudioDevice,
 } from '../utils/audioInputDevices';
+import { SpeechNoiseGate } from './audioGate';
 
 interface SpeechRecognitionConfig {
   languageCode: string;
@@ -49,7 +50,10 @@ class GoogleSpeechService {
   private audioContext: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
   private microphone: MediaStreamAudioSourceNode | null = null;
+  /** Modest lift so quiet speech and tab audio reach the recognizer. About +3.5 dB. */
+  private static readonly INPUT_GAIN = 1.5;
   private gainNode: GainNode | null = null;
+  private noiseGate: SpeechNoiseGate | null = null;
   private stream: MediaStream | null = null;
   private scriptProcessor: ScriptProcessorNode | null = null;
   private isRecording = false;
@@ -355,8 +359,10 @@ class GoogleSpeechService {
       this.analyser.fftSize = isMobileDevice ? 512 : 256;
       this.analyser.smoothingTimeConstant = isMobileDevice ? 0.7 : 0.8;
 
+      this.noiseGate = new SpeechNoiseGate(this.audioContext.sampleRate);
+
       this.gainNode = this.audioContext.createGain();
-      this.gainNode.gain.value = 1.0;
+      this.gainNode.gain.value = GoogleSpeechService.INPUT_GAIN;
 
       this.microphone = this.audioContext.createMediaStreamSource(this.stream);
       this.microphone.connect(this.gainNode);
@@ -413,6 +419,15 @@ class GoogleSpeechService {
       this.microphone = null;
     }
 
+    if (this.gainNode) {
+      try {
+        this.gainNode.disconnect();
+      } catch {
+        /* ignore */
+      }
+      this.gainNode = null;
+    }
+
     if (this.stream) {
       this.stream.getTracks().forEach((track) => track.stop());
       this.stream = null;
@@ -424,7 +439,7 @@ class GoogleSpeechService {
     }
 
     this.analyser = null;
-    this.gainNode = null;
+    this.noiseGate = null;
     this.activeDeviceId = undefined;
   }
 
@@ -507,42 +522,18 @@ class GoogleSpeechService {
         this.scriptProcessor = this.audioContext!.createScriptProcessor(bufferSize, 1, 1);
       }
       
-      // Connect audio chain: microphone -> gain -> script processor
-      // The gain node is already connected to analyser, so we need to create a separate connection
-      // for the script processor. We'll connect gain -> script processor
-      if (this.gainNode) {
-        this.gainNode.connect(this.scriptProcessor);
-      } else {
-        // Fallback if gain node doesn't exist (shouldn't happen, but safety check)
-        this.microphone!.connect(this.scriptProcessor);
-      }
+      this.connectCaptureToProcessor();
       // Connect to destination to keep the audio processing active (required on some mobile browsers)
       this.scriptProcessor.connect(this.audioContext!.destination);
+
+      this.noiseGate?.reset();
       
       // Process raw audio data
       this.scriptProcessor.onaudioprocess = (event) => {
         if (this.isRecording && !this.isPaused) {
-          const inputBuffer = event.inputBuffer;
-          const inputData = inputBuffer.getChannelData(0); // Get mono channel
-          
-          // Calculate audio level for silence detection BEFORE processing
-          const audioLevel = this.calculateAudioLevel(inputData);
-          
-          // Update last speech time if audio is detected
-          if (audioLevel > 0.02) { // Threshold for speech detection
-            this.lastSpeechTime = Date.now();
-            this.silenceStartTime = null;
-          } else {
-            // Track silence start
-            if (this.silenceStartTime === null) {
-              this.silenceStartTime = Date.now();
-            }
-          }
-          
-          // Convert Float32Array to Int16Array (LINEAR16 format)
-          const linear16Data = this.convertFloat32ToInt16(inputData);
-          
-          this.processRawAudioChunk(linear16Data);
+          const inputData = event.inputBuffer.getChannelData(0);
+          const samples = this.gateSamplesForSpeech(inputData);
+          this.processRawAudioChunk(this.convertFloat32ToInt16(samples));
         }
       };
 
@@ -630,26 +621,14 @@ class GoogleSpeechService {
       const bufferSize = 4096;
       this.scriptProcessor = this.audioContext!.createScriptProcessor(bufferSize, 1, 1);
 
-      if (this.gainNode) {
-        this.gainNode.connect(this.scriptProcessor);
-      } else {
-        this.microphone!.connect(this.scriptProcessor);
-      }
+      this.connectCaptureToProcessor();
       this.scriptProcessor.connect(this.audioContext!.destination);
 
       this.scriptProcessor.onaudioprocess = (event) => {
         if (this.isRecording && !this.isPaused) {
           const inputData = event.inputBuffer.getChannelData(0);
-          const audioLevel = this.calculateAudioLevel(inputData);
-
-          if (audioLevel > 0.02) {
-            this.lastSpeechTime = Date.now();
-            this.silenceStartTime = null;
-          } else if (this.silenceStartTime === null) {
-            this.silenceStartTime = Date.now();
-          }
-
-          this.processRawAudioChunk(this.convertFloat32ToInt16(inputData));
+          const samples = this.gateSamplesForSpeech(inputData);
+          this.processRawAudioChunk(this.convertFloat32ToInt16(samples));
         }
       };
 
@@ -731,19 +710,37 @@ class GoogleSpeechService {
     }
   }
 
-  /**
-   * Set microphone gain (volume adjustment)
-   * @param gain Gain value from 0.0 to 1.5 (1.0 = 100%, no adjustment)
-   */
-  setMicrophoneGain(gain: number): void {
-    if (!this.gainNode) {
-      console.warn('⚠️ Cannot set microphone gain: gain node not initialized');
+  private connectCaptureToProcessor(): void {
+    if (!this.scriptProcessor) {
       return;
     }
-    
-    // Clamp gain value to valid range
-    const clampedGain = Math.max(0.0, Math.min(1.5, gain));
-    this.gainNode.gain.value = clampedGain;
+
+    if (this.gainNode) {
+      this.gainNode.connect(this.scriptProcessor);
+    } else {
+      this.microphone!.connect(this.scriptProcessor);
+    }
+  }
+
+  private gateSamplesForSpeech(inputData: Float32Array): Float32Array {
+    if (!this.noiseGate && this.audioContext) {
+      this.noiseGate = new SpeechNoiseGate(this.audioContext.sampleRate);
+    }
+
+    if (!this.noiseGate) {
+      return inputData;
+    }
+
+    const gated = this.noiseGate.process(inputData);
+    if (gated.isSpeech) {
+      this.lastSpeechTime = Date.now();
+      this.silenceStartTime = null;
+    } else if (this.silenceStartTime === null) {
+      this.silenceStartTime = Date.now();
+    }
+
+    // Pause timing uses the gate. The samples sent for transcription stay untouched.
+    return inputData;
   }
 
   /**
@@ -972,18 +969,6 @@ class GoogleSpeechService {
       clearTimeout(this.wordCountTimer);
       this.wordCountTimer = null;
     }
-  }
-
-  /**
-   * Calculate audio level from raw audio data (for silence detection)
-   */
-  private calculateAudioLevel(audioData: Float32Array): number {
-    let sum = 0;
-    for (let i = 0; i < audioData.length; i++) {
-      sum += audioData[i] * audioData[i];
-    }
-    const rms = Math.sqrt(sum / audioData.length);
-    return rms;
   }
 
   /**

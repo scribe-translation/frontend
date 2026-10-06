@@ -5,7 +5,7 @@ import RecordingPreferences from './RecordingPreferences'
 import Typography from '../UI/Typography'
 import { getSTTLanguageInfo, GoogleSTTLanguageCode } from '../../enums/googleSTTLangs'
 import { getCTLanguageInfo, isValidCTLanguageCode } from '../../enums/googleCTLangs'
-import { Paper, Chip, Button, Box, IconButton, useMediaQuery, useTheme, Dialog, DialogTitle, DialogContent, DialogActions, CircularProgress, Tooltip, Snackbar, Alert, Slider, FormControlLabel, Checkbox, FormGroup, Divider, Collapse } from '@mui/material'
+import { Paper, Chip, Button, Box, IconButton, useMediaQuery, useTheme, Dialog, DialogTitle, DialogContent, DialogActions, CircularProgress, Tooltip, Snackbar, Alert, FormControlLabel, Checkbox, FormGroup, Divider, Collapse } from '@mui/material'
 import PeopleIcon from '@mui/icons-material/People'
 import DownloadIcon from '@mui/icons-material/Download'
 import LogoutIcon from '@mui/icons-material/Logout'
@@ -26,7 +26,7 @@ import { AudienceQrCode, downloadAudienceQr } from './AudienceQrCode'
 import { useSessionCode } from '../../contexts/SessionContext'
 // ProfileModal removed in favor of full page /profile
 import googleSpeechService from '../../services/googleSpeechService'
-import { setCookie, getCookie } from '../../utils/cookieUtils'
+import { setCookie } from '../../utils/cookieUtils'
 import {
   loadSavedInputDevice,
   saveInputDevice,
@@ -243,37 +243,11 @@ function InputApp() {
     })
   }
 
-  // Handle microphone gain change
-  const handleMicrophoneGainChange = (event: Event, newValue: number | number[]) => {
-    const gain = Array.isArray(newValue) ? newValue[0] : newValue
-    setMicrophoneGain(gain)
-    // Apply gain immediately (works in real-time during ongoing stream)
-    googleSpeechService.setMicrophoneGain(gain)
-    // Save to cookie
-    setCookie('scribe-microphone-gain', gain.toString(), {
-      maxAge: 365 * 24 * 60 * 60, // 1 year
-      path: '/',
-      sameSite: 'lax'
-    })
-  }
   const [isTranslating, setIsTranslating] = useState(false)
   const [shouldBeListening, setShouldBeListening] = useState(false)
   const [audioLevel, setAudioLevel] = useState<number>(0) // Audio level from 0 to 1
   const [transcriptionBubbles, setTranscriptionBubbles] = useState<MessageBubble[]>([])
   const [currentTranscription, setCurrentTranscription] = useState('')
-
-  // Microphone gain control (0.0 to 1.5, default 1.0 = 100%)
-  const getInitialMicrophoneGain = (): number => {
-    const savedGain = getCookie('scribe-microphone-gain')
-    if (savedGain) {
-      const gain = parseFloat(savedGain)
-      if (!isNaN(gain) && gain >= 0 && gain <= 1.5) {
-        return gain
-      }
-    }
-    return 1.0 // Default: 100% (no adjustment)
-  }
-  const [microphoneGain, setMicrophoneGain] = useState<number>(getInitialMicrophoneGain())
 
   // Calculate button color based on audio level
   const getButtonColor = () => {
@@ -281,15 +255,11 @@ function InputApp() {
       return undefined // Use default Material-UI primary color (#9BB5D1)
     }
 
-    // Set a threshold - only start changing color above this level
-    const audioThreshold = 0.20 // Only react to audio levels above 15%
+    // Start shifting as soon as there is audible input, and reach the full color
+    // while the level is still moderate so the boost is visible.
+    const audioThreshold = 0.04
     const adjustedLevel = Math.max(0, audioLevel - audioThreshold)
-
-    // Normalize the adjusted level to 0-1 range
-    const normalizedLevel = Math.min(1, adjustedLevel / (1 - audioThreshold))
-
-    // Apply sensitivity to the normalized level
-    const intensity = Math.min(normalizedLevel * 2, 1) // Reduced from 3 to 2 for smoother transition
+    const intensity = Math.min(1, adjustedLevel / 0.22)
 
     // Start with your brand's primary color (#9BB5D1) and scale towards a neutral warm tone
     const brandRed = 155   // #9BB5D1 red component
@@ -919,12 +889,6 @@ function InputApp() {
     }
   }, [isSocketConnected])
 
-  useEffect(() => {
-    if (googleSpeechService.isMicrophoneReady()) {
-      googleSpeechService.setMicrophoneGain(microphoneGain)
-    }
-  }, [microphoneGain])
-
   // Cleanup Google Speech Service on unmount
   useEffect(() => {
     return () => {
@@ -1042,7 +1006,6 @@ function InputApp() {
         deviceId: selectedDeviceId ?? undefined,
         onMicrophoneLost: handleMicrophoneLost,
       })
-      googleSpeechService.setMicrophoneGain(microphoneGain)
       setMicPermissionDenied(false)
       setMicNeedsPrompt(false)
       setErrorMessage(null)
@@ -1076,7 +1039,6 @@ function InputApp() {
   }, [
     isSocketConnected,
     selectedDeviceId,
-    microphoneGain,
     handleMicrophoneLost,
     startGoogleSpeechRecognitionInternal,
   ])
@@ -1265,42 +1227,6 @@ function InputApp() {
                   disabled={isTranslating}
                   micAccessResetKey={micAccessResetKey}
                 />
-                <Box sx={{ marginTop: '1rem' }}>
-                  <Tooltip title="Lower values reduce background noise, breathing, and static. Adjust in real-time during recording.">
-                    <Box sx={{ position: 'relative', width: '100%' }}>
-                      <Box
-                        sx={{
-                          position: 'absolute',
-                          left: 0,
-                          bottom: '8px',
-                          height: 4,
-                          width: `${audioLevel * 100}%`,
-                          backgroundColor: isTranslating ? 'primary.main' : 'rgba(155, 181, 209, 0.3)',
-                          borderRadius: '2px',
-                          transition: 'width 0.1s ease-out, background-color 0.2s',
-                          zIndex: 0,
-                        }}
-                      />
-                      <Slider
-                        value={microphoneGain}
-                        onChange={handleMicrophoneGainChange}
-                        min={0.0}
-                        max={1.5}
-                        step={0.05}
-                        disabled={!isServiceReady}
-                        sx={{
-                          position: 'relative',
-                          zIndex: 1,
-                          color: 'primary.main',
-                          '& .MuiSlider-thumb': { width: 16, height: 16 },
-                          '& .MuiSlider-track': { height: 4 },
-                          '& .MuiSlider-rail': { height: 4, opacity: 0.3 },
-                        }}
-                        marks={[{ value: 0.5, label: '50%' }, { value: 1.0, label: '100%' }]}
-                      />
-                    </Box>
-                  </Tooltip>
-                </Box>
               </Box>
             </Box>
           </Collapse>
@@ -1453,52 +1379,6 @@ function InputApp() {
               disabled={isTranslating}
               micAccessResetKey={micAccessResetKey}
             />
-            <Box>
-              <Tooltip title="Lower values reduce background noise, breathing, and static. Adjust in real-time during recording.">
-                <Box sx={{ position: 'relative', width: '100%', marginTop: '1rem' }}>
-                  <Box
-                    sx={{
-                      position: 'absolute',
-                      left: 0,
-                      height: 4,
-                      width: `${audioLevel * 100}%`,
-                      backgroundColor: isTranslating ? 'primary.main' : 'rgba(155, 181, 209, 0.3)',
-                      borderRadius: '2px',
-                      transition: 'width 0.1s ease-out, background-color 0.2s',
-                      zIndex: 0,
-                    }}
-                  />
-                  <Slider
-                    value={microphoneGain}
-                    onChange={handleMicrophoneGainChange}
-                    min={0.0}
-                    max={1.5}
-                    step={0.05}
-                    disabled={!isServiceReady}
-                    sx={{
-                      position: 'relative',
-                      zIndex: 1,
-                      color: 'primary.main',
-                      '& .MuiSlider-thumb': {
-                        width: 16,
-                        height: 16,
-                      },
-                      '& .MuiSlider-track': {
-                        height: 4,
-                      },
-                      '& .MuiSlider-rail': {
-                        height: 4,
-                        opacity: 0.3,
-                      },
-                    }}
-                    marks={[
-                      { value: 0.5, label: '50%' },
-                      { value: 1.0, label: '100%' },
-                    ]}
-                  />
-                </Box>
-              </Tooltip>
-            </Box>
           </Box>
           {micPermissionDenied && (
             <Alert severity="warning" sx={{ borderRadius: '1rem', marginTop: '1rem' }}>
@@ -1526,7 +1406,22 @@ function InputApp() {
             disabled={!isServiceReady}
             sx={{
               borderRadius: '2rem',
-              marginTop: '2rem'
+              marginTop: '1rem',
+              ...(isTranslating
+                ? {
+                    backgroundColor: getButtonColor(),
+                    border: `1px solid ${getButtonColor()}`,
+                    outline: 'none',
+                    boxShadow: 'none',
+                    transition: 'background-color 0.08s linear, border-color 0.08s linear',
+                    '&:hover, &:focus, &:focus-visible': {
+                      backgroundColor: getButtonColor(),
+                      border: `1px solid ${getButtonColor()}`,
+                      outline: 'none',
+                      boxShadow: 'none',
+                    },
+                  }
+                : {}),
             }}
             onClick={() => {
               if (isTranslating) {

@@ -1,6 +1,6 @@
 // Google Cloud Speech-to-Text V2 supported languages
 // Reference: https://docs.cloud.google.com/speech-to-text/docs/speech-to-text-supported-languages
-// Model used in backend: 'latest_long' (automatically selects best available model)
+// Backend prefers latest_short where Google supports it, otherwise latest_long or telephony.
 
 export enum GoogleSTTLanguageCode {
   // Afrikaans

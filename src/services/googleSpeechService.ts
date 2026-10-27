@@ -153,35 +153,31 @@ class GoogleSpeechService {
     this.socket.on('transcriptionUpdate', (data: any) => {
         const isCurrentBubble = data.bubbleId === this.currentBubbleId;
 
-        if (data.isFinal) {
-          if (!isCurrentBubble) {
-            return;
-          }
+        if (!isCurrentBubble) {
+          return;
+        }
 
-          if (
-            this.lastClientFinalizedBubbleId &&
-            data.bubbleId === this.lastClientFinalizedBubbleId
-          ) {
+        if (data.isFinal) {
+          if (data.bubbleId === this.lastClientFinalizedBubbleId) {
             this.lastClientFinalizedBubbleId = null;
             return;
           }
 
-          if (this.callbacks?.onFinalResult) {
-            this.callbacks.onFinalResult({
-              transcript: data.transcript,
-              isFinal: data.isFinal,
-              confidence: data.confidence,
-              wordCount: this.currentWordCount,
-              bubbleId: data.bubbleId
-            });
-            this.currentTranscript = '';
-            this.hasReceivedFinalResult = true;
-          }
-        } else {
-          if (!isCurrentBubble) {
+          const transcript = (data.transcript || '').trim();
+          if (!transcript || !this.callbacks?.onFinalResult) {
             return;
           }
 
+          this.callbacks.onFinalResult({
+            transcript,
+            isFinal: data.isFinal,
+            confidence: data.confidence,
+            wordCount: this.currentWordCount,
+            bubbleId: data.bubbleId
+          });
+          this.currentTranscript = '';
+          this.hasReceivedFinalResult = true;
+        } else {
           const incoming = (data.transcript || '').trim();
           const preserved = (this.currentTranscript || '').trim();
 
@@ -190,25 +186,24 @@ class GoogleSpeechService {
           if (!incoming && preserved) {
             return;
           }
-
-          if (this.callbacks?.onInterimResult) {
-            this.currentTranscript = data.transcript;
-            this.currentWordCount = data.transcript.trim().split(/\s+/).filter(w => w.length > 0).length;
-            this.lastSpeechTime = Date.now();
-            this.lastInterimResultTime = Date.now();
-            this.silenceStartTime = null;
-            if (incoming) {
-              this.hasReceivedFinalResult = false;
-            }
-
-            this.callbacks.onInterimResult({
-              transcript: data.transcript,
-              isFinal: data.isFinal,
-              confidence: data.confidence,
-              wordCount: this.currentWordCount,
-              bubbleId: data.bubbleId
-            });
+          if (!incoming || !this.callbacks?.onInterimResult) {
+            return;
           }
+
+          this.currentTranscript = incoming;
+          this.currentWordCount = incoming.split(/\s+/).filter(w => w.length > 0).length;
+          this.lastInterimResultTime = Date.now();
+          this.lastSpeechTime = Date.now();
+          this.silenceStartTime = null;
+          this.hasReceivedFinalResult = false;
+
+          this.callbacks.onInterimResult({
+            transcript: incoming,
+            isFinal: data.isFinal,
+            confidence: data.confidence,
+            wordCount: this.currentWordCount,
+            bubbleId: data.bubbleId
+          });
         }
       });
       
@@ -739,7 +734,6 @@ class GoogleSpeechService {
       this.silenceStartTime = Date.now();
     }
 
-    // Pause timing uses the gate. The samples sent for transcription stay untouched.
     return inputData;
   }
 
@@ -1091,24 +1085,16 @@ class GoogleSpeechService {
       }
       
       const now = Date.now();
-      const timeSinceLastSpeech = now - this.lastSpeechTime;
-      const silenceTimeout = this.config.speechEndTimeout * 1000; // Convert to milliseconds
+      const silenceTimeout = this.config.speechEndTimeout * 1000;
+      const minTimeSinceInterim = 2000;
       
-      // If we've been silent for longer than the timeout, finalize the current transcript
-      // BUT only if we haven't received an interim result recently (Google Cloud might still be processing)
-      const timeSinceLastInterim = now - this.lastInterimResultTime;
-      const MIN_TIME_SINCE_INTERIM = 2000; // Wait at least 2 seconds after last interim result
-      
-      if (this.silenceStartTime !== null && timeSinceLastSpeech > silenceTimeout) {
+      if (this.silenceStartTime !== null) {
         const silenceDuration = now - this.silenceStartTime;
+        const timeSinceInterim = now - this.lastInterimResultTime;
         
-        // Only finalize if:
-        // 1. We have a transcript and silence has been detected
-        // 2. We haven't received an interim result recently (Google Cloud might still be processing)
-        // 3. We haven't already received a final result from Google Cloud
         if (silenceDuration > silenceTimeout && 
+            timeSinceInterim > minTimeSinceInterim &&
             this.currentTranscript.trim() && 
-            timeSinceLastInterim > MIN_TIME_SINCE_INTERIM &&
             !this.hasReceivedFinalResult) {
           const finalTranscript = this.currentTranscript.trim();
           const finalBubbleId = this.currentBubbleId || this.generateBubbleId();

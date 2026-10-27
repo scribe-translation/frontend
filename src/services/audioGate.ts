@@ -15,6 +15,7 @@ export const NOISE_GATE_HANG_MS = 500
 export interface GatedAudio {
   samples: Float32Array
   isSpeech: boolean
+  level: number
 }
 
 export class SpeechNoiseGate {
@@ -46,7 +47,7 @@ export class SpeechNoiseGate {
 
   process(input: Float32Array): GatedAudio {
     if (input.length === 0) {
-      return { samples: input, isSpeech: false }
+      return { samples: input, isSpeech: false, level: 0 }
     }
 
     let sum = 0
@@ -104,6 +105,6 @@ export class SpeechNoiseGate {
       this.noiseFloor = level
     }
 
-    return { samples: input, isSpeech }
+    return { samples: input, isSpeech, level }
   }
 }

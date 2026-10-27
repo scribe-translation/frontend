@@ -286,6 +286,7 @@ const RightPanelContent = styled.div<{ isMobile: boolean }>`
 `
 
 const SCROLL_THRESHOLD = 48
+const TYPING_INDICATOR_HIDE_DELAY_MS = 5000
 
 const BackButton = styled(Button)`
   border-radius: 2rem;
@@ -317,8 +318,10 @@ function TranslationApp() {
   const [targetLanguage, setTargetLanguage] = useState<GoogleCTLanguageCode>(getInitialTargetLanguage())
   const [sourceLanguage, setSourceLanguage] = useState<string | undefined>(undefined) // Track source language from speaker
   const [translationBubbles, setTranslationBubbles] = useState<TranslationBubble[]>([])
-  const [isSpeakerTyping, setIsSpeakerTyping] = useState(false) // Track if speaker is typing (interim transcription)
+  const [isSpeakerTyping, setIsSpeakerTyping] = useState(false) // Listener-facing "speaker is talking" bubble
   const [interimText, setInterimText] = useState<string | null>(null)
+  const typingHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const speakerActivelyTypingRef = useRef(false)
 
   // Text-to-Speech state
   const [ttsEnabled, setTtsEnabled] = useState(false)
@@ -986,18 +989,42 @@ function TranslationApp() {
       translatedInterimText?: string
       sourceLanguage?: string 
     }) => {
-      setIsSpeakerTyping(data.isTyping)
-      if (data.translatedInterimText) {
-        setInterimText(data.translatedInterimText)
-      } else {
-        // Flag-off / dots-only path — clear any leftover interim text
-        setInterimText(null)
+      if (data.isTyping) {
+        if (typingHideTimerRef.current) {
+          clearTimeout(typingHideTimerRef.current)
+          typingHideTimerRef.current = null
+        }
+        speakerActivelyTypingRef.current = true
+        setIsSpeakerTyping(true)
+        if (data.translatedInterimText) {
+          setInterimText(data.translatedInterimText)
+        } else {
+          // Flag-off / dots-only path — clear any leftover interim text
+          setInterimText(null)
+        }
+        return
       }
+
+      // Speech pauses constantly between phrases. Keep the bubble up so the
+      // list doesn't collapse and reflow, and only hide it after a quiet gap.
+      speakerActivelyTypingRef.current = false
+      if (typingHideTimerRef.current) {
+        clearTimeout(typingHideTimerRef.current)
+      }
+      typingHideTimerRef.current = setTimeout(() => {
+        typingHideTimerRef.current = null
+        setIsSpeakerTyping(false)
+        setInterimText(null)
+      }, TYPING_INDICATOR_HIDE_DELAY_MS)
     })
 
     socketRef.current.on('translationComplete', (data) => {
-      setInterimText(null)
-      setIsSpeakerTyping(false)
+      // Keep the typing bubble mounted. Collapsing it shifts every bubble
+      // because the list is pinned to the bottom. If the speaker has already
+      // moved on, leave the new interim text in place.
+      if (!speakerActivelyTypingRef.current) {
+        setInterimText(null)
+      }
 
       // Immediately acknowledge receipt if messageId is present (guaranteed delivery system)
       if (data.messageId && socketRef.current?.connected) {
@@ -1175,6 +1202,10 @@ function TranslationApp() {
     })
 
     return () => {
+      if (typingHideTimerRef.current) {
+        clearTimeout(typingHideTimerRef.current)
+        typingHideTimerRef.current = null
+      }
       clearReconnectFallback()
       clearRegistrationRetry()
       beginRegistrationConfirmationRef.current = null

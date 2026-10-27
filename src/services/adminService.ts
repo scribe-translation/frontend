@@ -57,7 +57,15 @@ export interface AdminSession {
 
 export interface AppSettings {
   interimTranslationEnabled: boolean
+  interimTranslationEnabledUserIds: string[]
+  interimTranslationDisabledUserIds: string[]
   updatedAt?: string | null
+}
+
+export interface AppSettingsPatch {
+  interimTranslationEnabled?: boolean
+  interimTranslationEnabledUserIds?: string[]
+  interimTranslationDisabledUserIds?: string[]
 }
 
 async function adminFetch<T>(
@@ -142,9 +150,9 @@ export const adminService = {
   getSettings: (token: string) =>
     adminFetch<{ settings: AppSettings }>('/admin/settings', token),
 
-  patchSettings: (token: string, interimTranslationEnabled: boolean) =>
+  patchSettings: (token: string, patch: AppSettingsPatch) =>
     adminFetch<{ settings: AppSettings; message: string }>('/admin/settings', token, {
       method: 'PATCH',
-      body: JSON.stringify({ interimTranslationEnabled }),
+      body: JSON.stringify(patch),
     }),
 }

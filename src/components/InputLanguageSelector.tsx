@@ -1,12 +1,19 @@
-import React, { useState } from 'react'
-import { GoogleSTTLanguageCode, getAllSTTLanguages } from '../enums/googleSTTLangs'
+import React, { useMemo, useState } from 'react'
 import { MenuItem, Select, Box, Typography } from '@mui/material'
 import { createHybridFlagElement } from '../utils/flagEmojiUtils.tsx'
+import {
+  STTLanguageCode,
+  STTLanguageInfo,
+  STTProvider,
+  getSTTLanguagesForProvider,
+} from '../enums/sttLanguages'
 
 interface InputLanguageSelectorProps {
   label: string
-  selectedLanguage: GoogleSTTLanguageCode
-  onLanguageChange: (language: GoogleSTTLanguageCode) => void
+  selectedLanguage: STTLanguageCode
+  onLanguageChange: (language: STTLanguageCode) => void
+  provider?: STTProvider
+  languages?: STTLanguageInfo[]
   compact?: boolean
 }
 
@@ -14,11 +21,17 @@ const InputLanguageSelector: React.FC<InputLanguageSelectorProps> = ({
   label,
   selectedLanguage,
   onLanguageChange,
+  provider = 'deepgram',
+  languages,
   compact = false
 }) => {
   const [isOpen, setIsOpen] = useState(false)
+  const options = useMemo(
+    () => languages ?? getSTTLanguagesForProvider(provider),
+    [languages, provider]
+  )
 
-  const handleLanguageSelect = (language: GoogleSTTLanguageCode) => {
+  const handleLanguageSelect = (language: STTLanguageCode) => {
     onLanguageChange(language)
     setIsOpen(false)
   }
@@ -26,13 +39,13 @@ const InputLanguageSelector: React.FC<InputLanguageSelectorProps> = ({
   return (
     <Select
       value={selectedLanguage}
-      onChange={(e) => handleLanguageSelect(e.target.value as GoogleSTTLanguageCode)}
+      onChange={(e) => handleLanguageSelect(e.target.value as STTLanguageCode)}
       open={isOpen}
       onOpen={() => setIsOpen(true)}
       onClose={() => setIsOpen(false)}
       label={compact ? undefined : label}
       renderValue={(selected) => {
-        const language = getAllSTTLanguages().find(lang => lang.code === selected);
+        const language = options.find(lang => lang.code === selected);
         if (!language) return null;
         return (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: '6px', overflow: 'hidden', width: '100%' }}>
@@ -86,7 +99,7 @@ const InputLanguageSelector: React.FC<InputLanguageSelectorProps> = ({
         }
       }}
     >
-      {getAllSTTLanguages().map((language) => (
+      {options.map((language) => (
         <MenuItem key={language.code} value={language.code} sx={{ fontSize: compact ? '12px' : '1rem' }}>
           <span style={{ marginRight: '0.5rem', display: 'flex', alignItems: 'center' }}>{createHybridFlagElement(language.code, compact ? 16 : 18)}</span>
           {language.name}

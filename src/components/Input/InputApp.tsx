@@ -3,7 +3,13 @@ import InputLanguageSelector from '../InputLanguageSelector'
 import DeviceSelector from './DeviceSelector'
 import RecordingPreferences from './RecordingPreferences'
 import Typography from '../UI/Typography'
-import { getSTTLanguageInfo, GoogleSTTLanguageCode } from '../../enums/googleSTTLangs'
+import {
+  STTLanguageCode,
+  STTProvider,
+  coerceSTTLanguageForProvider,
+  getSTTLanguagesForProvider,
+  resolveSTTLanguageInfo,
+} from '../../enums/sttLanguages'
 import { getCTLanguageInfo, isValidCTLanguageCode } from '../../enums/googleCTLangs'
 import { Paper, Chip, Button, Box, IconButton, useMediaQuery, useTheme, Dialog, DialogTitle, DialogContent, DialogActions, CircularProgress, Tooltip, Snackbar, Alert, FormControlLabel, Checkbox, FormGroup, Divider, Collapse } from '@mui/material'
 import PeopleIcon from '@mui/icons-material/People'
@@ -224,13 +230,14 @@ const RightPanelContent = styled.div<{ isMobile: boolean }>`
 `
 
 function InputApp() {
-  // Initialize source language from cookie or default
-  const [sourceLanguage, setSourceLanguage] = useState<GoogleSTTLanguageCode>('en-CA')
+  // Initialize source language from cookie or default (catalog depends on STT provider)
+  const [sttProvider, setSttProvider] = useState<STTProvider>('deepgram')
+  const [sourceLanguage, setSourceLanguage] = useState<STTLanguageCode>('en-CA')
   const [settingsExpanded, setSettingsExpanded] = useState(true)
   const [connectionCount, setConnectionCount] = useState<{ total: number, byLanguage: Record<string, number> }>({ total: 0, byLanguage: {} })
 
   // Handle source language change and save to cookie
-  const handleSourceLanguageChange = (language: GoogleSTTLanguageCode) => {
+  const handleSourceLanguageChange = (language: STTLanguageCode) => {
     // If language changed while recording, clear current transcript to prevent mixing
     if (sourceLanguage !== language && isTranslating) {
       setCurrentTranscription('')
@@ -242,6 +249,39 @@ function InputApp() {
       sameSite: 'lax'
     })
   }
+
+  useEffect(() => {
+    let cancelled = false
+    const loadSttConfig = async () => {
+      try {
+        const response = await fetch(`${CONFIG.BACKEND_URL}/api/stt/config`)
+        if (!response.ok) {
+          throw new Error(`STT config HTTP ${response.status}`)
+        }
+        const data = await response.json()
+        const provider: STTProvider = data.provider === 'google' ? 'google' : 'deepgram'
+        if (cancelled) return
+        setSttProvider(provider)
+        setSourceLanguage((current) => {
+          const next = coerceSTTLanguageForProvider(provider, current)
+          if (next !== current) {
+            setCookie('scribe-source-language', next, {
+              maxAge: 365 * 24 * 60 * 60,
+              path: '/',
+              sameSite: 'lax',
+            })
+          }
+          return next
+        })
+      } catch (error) {
+        console.warn('Failed to load STT config; defaulting to deepgram languages', error)
+      }
+    }
+    void loadSttConfig()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const [isTranslating, setIsTranslating] = useState(false)
   const [shouldBeListening, setShouldBeListening] = useState(false)
@@ -1134,6 +1174,8 @@ function InputApp() {
                 label="Source Language"
                 selectedLanguage={sourceLanguage}
                 onLanguageChange={handleSourceLanguageChange}
+                provider={sttProvider}
+                languages={getSTTLanguagesForProvider(sttProvider)}
                 compact
               />
             </Box>
@@ -1332,7 +1374,7 @@ function InputApp() {
                     if (isValidCTLanguageCode(lang)) {
                       languageName = getCTLanguageInfo(lang).name
                     } else {
-                      const sttInfo = getSTTLanguageInfo(lang as GoogleSTTLanguageCode)
+                      const sttInfo = resolveSTTLanguageInfo(lang)
                       languageName = sttInfo.name !== 'Unknown' ? sttInfo.name : lang
                     }
 
@@ -1363,7 +1405,9 @@ function InputApp() {
           <InputLanguageSelector
             label="Source Language"
             selectedLanguage={sourceLanguage}
-             onLanguageChange={handleSourceLanguageChange}
+            onLanguageChange={handleSourceLanguageChange}
+            provider={sttProvider}
+            languages={getSTTLanguagesForProvider(sttProvider)}
           />
 
           <RecordingPreferences 

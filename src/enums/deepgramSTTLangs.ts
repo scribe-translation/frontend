@@ -47,7 +47,7 @@ export enum DeepgramSTTLanguageCode {
   EN_GB = 'en-GB',
   EN_IN = 'en-IN',
   EN_NZ = 'en-NZ',
-  EN_CA = 'en-CA',
+  // Note: Deepgram nova-3 monolingual rejects en-CA (HTTP 400). Keep Canada as en.
 
   ET = 'et',
   FI = 'fi',
@@ -107,8 +107,6 @@ export enum DeepgramSTTLanguageCode {
   UK = 'uk',
   UR = 'ur',
   VI = 'vi',
-  XH = 'xh',
-  ZU = 'zu',
 }
 
 export interface DeepgramSTTLanguageMetadata {
@@ -167,7 +165,6 @@ export const DEEPGRAM_STT_LANGUAGE_METADATA: Record<DeepgramSTTLanguageCode, Dee
   [DeepgramSTTLanguageCode.EN_GB]: { name: 'English (UK)', flag: '🇬🇧', region: 'United Kingdom' },
   [DeepgramSTTLanguageCode.EN_IN]: { name: 'English (India)', flag: '🇮🇳', region: 'India' },
   [DeepgramSTTLanguageCode.EN_NZ]: { name: 'English (New Zealand)', flag: '🇳🇿', region: 'New Zealand' },
-  [DeepgramSTTLanguageCode.EN_CA]: { name: 'English (Canada)', flag: '🇨🇦', region: 'Canada' },
 
   [DeepgramSTTLanguageCode.ET]: { name: 'Estonian', nativeName: 'Eesti', flag: '🇪🇪', region: 'General' },
   [DeepgramSTTLanguageCode.FI]: { name: 'Finnish', nativeName: 'Suomi', flag: '🇫🇮', region: 'General' },
@@ -227,8 +224,6 @@ export const DEEPGRAM_STT_LANGUAGE_METADATA: Record<DeepgramSTTLanguageCode, Dee
   [DeepgramSTTLanguageCode.UK]: { name: 'Ukrainian', nativeName: 'Українська', flag: '🇺🇦', region: 'General' },
   [DeepgramSTTLanguageCode.UR]: { name: 'Urdu', nativeName: 'اردو', flag: '🇵🇰', region: 'General' },
   [DeepgramSTTLanguageCode.VI]: { name: 'Vietnamese', nativeName: 'Tiếng Việt', flag: '🇻🇳', region: 'General' },
-  [DeepgramSTTLanguageCode.XH]: { name: 'Xhosa', nativeName: 'isiXhosa', flag: '🇿🇦', region: 'General' },
-  [DeepgramSTTLanguageCode.ZU]: { name: 'Zulu', nativeName: 'isiZulu', flag: '🇿🇦', region: 'General' },
 }
 
 export const getDeepgramSTTLanguageInfo = (code: DeepgramSTTLanguageCode | string) => {
@@ -248,4 +243,4 @@ export const getAllDeepgramSTTLanguages = () =>
 export const isValidDeepgramSTTLanguageCode = (code: string): code is DeepgramSTTLanguageCode =>
   Object.values(DeepgramSTTLanguageCode).includes(code as DeepgramSTTLanguageCode)
 
-export const DEFAULT_DEEPGRAM_STT_LANGUAGE = DeepgramSTTLanguageCode.EN_CA
+export const DEFAULT_DEEPGRAM_STT_LANGUAGE = DeepgramSTTLanguageCode.EN_US

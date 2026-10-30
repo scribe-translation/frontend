@@ -232,7 +232,7 @@ const RightPanelContent = styled.div<{ isMobile: boolean }>`
 function InputApp() {
   // Initialize source language from cookie or default (catalog depends on STT provider)
   const [sttProvider, setSttProvider] = useState<STTProvider>('deepgram')
-  const [sourceLanguage, setSourceLanguage] = useState<STTLanguageCode>('en-CA')
+  const [sourceLanguage, setSourceLanguage] = useState<STTLanguageCode>('en-US')
   const [settingsExpanded, setSettingsExpanded] = useState(true)
   const [connectionCount, setConnectionCount] = useState<{ total: number, byLanguage: Record<string, number> }>({ total: 0, byLanguage: {} })
 
@@ -391,7 +391,7 @@ function InputApp() {
   const socketRef = React.useRef<Socket | null>(null)
   const timeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   const currentTranscriptionRef = React.useRef<string>('') // Ref to track current transcription for stream restart handler
-  const sourceLanguageRef = React.useRef<string>('en-CA') // Ref to track source language for stream restart handler
+  const sourceLanguageRef = React.useRef<string>('en-US') // Ref to track source language for stream restart handler
 
   // Connection health monitoring refs
   const lastPongTimeRef = React.useRef<number>(Date.now())

@@ -30,6 +30,11 @@ export const DEFAULT_STT_LANGUAGE_BY_PROVIDER: Record<STTProvider, STTLanguageCo
   google: GoogleSTTLanguageCode.EN_CA,
 }
 
+/** Cookie/UI codes that are valid for Google but must be remapped for Deepgram defaults. */
+const DEEPGRAM_UI_ALIASES: Record<string, STTLanguageCode> = {
+  'en-CA': DeepgramSTTLanguageCode.EN,
+}
+
 export function getSTTLanguagesForProvider(provider: STTProvider): STTLanguageInfo[] {
   if (provider === 'google') {
     return getAllGoogleSTTLanguages()
@@ -76,7 +81,13 @@ export function coerceSTTLanguageForProvider(
   provider: STTProvider,
   code: string | undefined | null
 ): STTLanguageCode {
-  if (code && isValidSTTLanguageForProvider(provider, code)) {
+  if (!code) {
+    return DEFAULT_STT_LANGUAGE_BY_PROVIDER[provider]
+  }
+  if (provider === 'deepgram' && DEEPGRAM_UI_ALIASES[code]) {
+    return DEEPGRAM_UI_ALIASES[code]
+  }
+  if (isValidSTTLanguageForProvider(provider, code)) {
     return code
   }
   return DEFAULT_STT_LANGUAGE_BY_PROVIDER[provider]

@@ -10,7 +10,7 @@ import {
   getSTTLanguagesForProvider,
   resolveSTTLanguageInfo,
 } from '../../enums/sttLanguages'
-import { getCTLanguageInfo, isValidCTLanguageCode } from '../../enums/googleCTLangs'
+import { getCTLanguageInfo, normalizeSavedCTLanguage } from '../../enums/googleCTLangs'
 import { Paper, Chip, Button, Box, IconButton, useMediaQuery, useTheme, Dialog, DialogTitle, DialogContent, DialogActions, CircularProgress, Tooltip, Snackbar, Alert, FormControlLabel, Checkbox, FormGroup, Divider, Collapse } from '@mui/material'
 import PeopleIcon from '@mui/icons-material/People'
 import DownloadIcon from '@mui/icons-material/Download'
@@ -1371,8 +1371,9 @@ function InputApp() {
                   {Object.entries(connectionCount.byLanguage).sort(([langA, countA], [langB, countB]) => countB - countA).map(([lang, count]) => {
                     // Try CT language first (for listeners), fallback to STT (for speakers)
                     let languageName = 'Unknown'
-                    if (isValidCTLanguageCode(lang)) {
-                      languageName = getCTLanguageInfo(lang).name
+                    const ctLanguage = normalizeSavedCTLanguage(lang)
+                    if (ctLanguage) {
+                      languageName = getCTLanguageInfo(ctLanguage).name
                     } else {
                       const sttInfo = resolveSTTLanguageInfo(lang)
                       languageName = sttInfo.name !== 'Unknown' ? sttInfo.name : lang

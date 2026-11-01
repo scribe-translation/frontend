@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from
 import Typography from '../UI/Typography'
 import { Paper, Chip, Button, Box, useMediaQuery, useTheme, CircularProgress, TextField, IconButton, Tooltip, Snackbar, Alert, ToggleButton, ToggleButtonGroup } from '@mui/material'
 import OutputLanguageSelector from '../OutputLanguageSelector'
-import { GoogleCTLanguageCode, getCTLanguageInfo, isValidCTLanguageCode } from '../../enums/googleCTLangs'
+import { GoogleCTLanguageCode, getCTLanguageInfo, isValidCTLanguageCode, normalizeSavedCTLanguage } from '../../enums/googleCTLangs'
 import { isTTSSupported } from '../../enums/googleTTSLangs'
 import { io, Socket } from 'socket.io-client'
 import styled, { keyframes } from 'styled-components'
@@ -308,9 +308,9 @@ interface TranslationBubble {
 function TranslationApp() {
   // Initialize target language from cookie or default
   const getInitialTargetLanguage = (): GoogleCTLanguageCode => {
-    const savedLanguage = getCookie('scribe-target-language')
-    if (savedLanguage && isValidCTLanguageCode(savedLanguage)) {
-      return savedLanguage as GoogleCTLanguageCode
+    const savedLanguage = normalizeSavedCTLanguage(getCookie('scribe-target-language'))
+    if (savedLanguage) {
+      return savedLanguage
     }
     return GoogleCTLanguageCode.FR
   }

@@ -79,8 +79,8 @@ export enum GoogleCTLanguageCode {
   // Estonian
   ET = 'et',                    // Estonian
 
-  // Filipino
-  FIL = 'fil',                  // Filipino
+  // Filipino. Cloud Translation code is Tagalog (`tl`). `fil` is formal written Filipino.
+  FIL = 'tl',                   // Filipino
 
   // Finnish
   FI = 'fi',                    // Finnish
@@ -402,7 +402,7 @@ export const GOOGLE_CT_LANGUAGE_METADATA: Record<GoogleCTLanguageCode, CTLanguag
   [GoogleCTLanguageCode.ET]: { name: 'Estonian', nativeName: 'Eesti', flag: '🇪🇪', isExperimental: false, baseCode: 'et' },
 
   // Filipino
-  [GoogleCTLanguageCode.FIL]: { name: 'Filipino', nativeName: 'Filipino', flag: '🇵🇭', isExperimental: false, baseCode: 'fil' },
+  [GoogleCTLanguageCode.FIL]: { name: 'Filipino', nativeName: 'Filipino', flag: '🇵🇭', isExperimental: false, baseCode: 'tl' },
 
   // Finnish
   [GoogleCTLanguageCode.FI]: { name: 'Finnish', nativeName: 'Suomi', flag: '🇫🇮', isExperimental: false, baseCode: 'fi' },
@@ -683,6 +683,9 @@ export const getBaseLanguageCode = (code: GoogleCTLanguageCode | string): string
   
   // Extract base code (en-US -> en, fr-FR -> fr)
   const parts = codeStr.split('-');
+  if (parts[0] === 'fil') {
+    return 'tl';
+  }
   return parts[0];
 };
 
@@ -719,6 +722,19 @@ export const getTranslatableLanguages = (sourceLanguage?: GoogleCTLanguageCode |
 // Check if a language code is valid
 export const isValidCTLanguageCode = (code: string): code is GoogleCTLanguageCode => {
   return Object.values(GoogleCTLanguageCode).includes(code as GoogleCTLanguageCode);
+};
+
+export const normalizeSavedCTLanguage = (code: string | null | undefined): GoogleCTLanguageCode | null => {
+  if (!code) {
+    return null;
+  }
+  if (code === 'fil' || code.startsWith('fil-')) {
+    return GoogleCTLanguageCode.FIL;
+  }
+  if (isValidCTLanguageCode(code)) {
+    return code;
+  }
+  return null;
 };
 
 // Get primary language variant (e.g., for English, return en-US)

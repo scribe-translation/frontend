@@ -451,6 +451,7 @@ const LANGUAGE_TO_COUNTRY: Record<string, string> = {
   // Additional languages that were showing wrong flags (only new ones)
   'jv': 'ID',        // Javanese (Indonesia)
   'fil': 'PH',       // Filipino (Philippines)
+  'tl': 'PH',        // Tagalog / Filipino (Philippines)
   'sw-KE': 'KE',     // Swahili (Kenya)
   'bs': 'BA',        // Bosnian (Bosnia and Herzegovina)
   'hy': 'AM',        // Armenian (Armenia)

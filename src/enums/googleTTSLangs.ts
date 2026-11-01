@@ -213,6 +213,7 @@ const CT_TO_TTS_MAPPING: Record<string, GoogleTTSLanguageCode> = {
   
   // Filipino
   'fil': GoogleTTSLanguageCode.FIL_PH,
+  'tl': GoogleTTSLanguageCode.FIL_PH,
   
   // Finnish
   'fi': GoogleTTSLanguageCode.FI_FI,

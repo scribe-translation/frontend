@@ -24,6 +24,8 @@ import {
   TableHead,
   TableRow,
   TableSortLabel,
+  ToggleButton,
+  ToggleButtonGroup,
   Tooltip,
 } from '@mui/material'
 import BlockIcon from '@mui/icons-material/Block'
@@ -31,9 +33,11 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import LinkOffIcon from '@mui/icons-material/LinkOff'
 import Typography from '../UI/Typography'
 import { adminService, AdminUser, formatUsageMinutes } from '../../services/adminService'
+import { formatBalanceHours } from '../../services/billingService'
 import { AdminDataCard, AdminTabHeader, useAdminMobile } from './adminShared'
 
 type SortKey = 'name' | 'email' | 'totalUsageMinutes' | 'totalSessions' | 'lastActiveAt'
+type BillingTierOption = 'standard' | 'complimentary' | 'discount'
 
 const SORT_OPTIONS: { value: SortKey; label: string }[] = [
   { value: 'totalUsageMinutes', label: 'Usage' },
@@ -41,6 +45,12 @@ const SORT_OPTIONS: { value: SortKey; label: string }[] = [
   { value: 'name', label: 'Name' },
   { value: 'email', label: 'Email' },
   { value: 'lastActiveAt', label: 'Last active' },
+]
+
+const BILLING_TIER_OPTIONS: { value: BillingTierOption; label: string; short: string }[] = [
+  { value: 'standard', label: 'Standard (pay per hours)', short: 'Pay' },
+  { value: 'discount', label: '10% off bundles', short: '10%' },
+  { value: 'complimentary', label: 'Complimentary (unlimited)', short: 'Free' },
 ]
 
 interface AdminUsersTabProps {
@@ -145,6 +155,56 @@ const AdminUsersTab: React.FC<AdminUsersTabProps> = ({ accessToken, currentUserI
     }
   }
 
+  const setBillingTier = async (user: AdminUser, billingTier: BillingTierOption) => {
+    if ((user.billingTier || 'standard') === billingTier) return
+    setActionLoading(user.id)
+    try {
+      await adminService.patchUser(accessToken, user.id, { billingTier })
+      const label =
+        BILLING_TIER_OPTIONS.find((opt) => opt.value === billingTier)?.label || billingTier
+      setSnackbar(`${user.name || user.email}: ${label}`)
+      await load()
+    } catch (err) {
+      setSnackbar(err instanceof Error ? err.message : 'Action failed')
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
+  const renderBillingControls = (user: AdminUser) => (
+    <ToggleButtonGroup
+      exclusive
+      size="small"
+      value={user.billingTier || 'standard'}
+      disabled={actionLoading === user.id}
+      onChange={(_event, next: BillingTierOption | null) => {
+        if (next) setBillingTier(user, next)
+      }}
+      aria-label={`Billing for ${user.email}`}
+      sx={{
+        flexWrap: 'wrap',
+        '& .MuiToggleButton-root': {
+          px: 1,
+          py: 0.25,
+          textTransform: 'none',
+          fontSize: '0.75rem',
+          lineHeight: 1.4,
+        },
+      }}
+    >
+      {BILLING_TIER_OPTIONS.map((opt) => (
+        <ToggleButton
+          key={opt.value}
+          value={opt.value}
+          aria-label={opt.label}
+          title={opt.label}
+        >
+          {opt.short}
+        </ToggleButton>
+      ))}
+    </ToggleButtonGroup>
+  )
+
   const renderUserActions = (user: AdminUser) => (
     <Stack direction="row" spacing={0.5} justifyContent={isMobile ? 'flex-start' : 'flex-end'}>
       {String(user.id) !== String(currentUserId) && (
@@ -247,6 +307,14 @@ const AdminUsersTab: React.FC<AdminUsersTabProps> = ({ accessToken, currentUserI
                   {' '}used
                 </Typography>
                 <Typography variant="bodyText" sx={{ fontSize: '0.8rem', color: 'text.secondary', fontStyle: 'normal' }}>
+                  <Box component="span" sx={{ color: 'primary.main', fontWeight: 600 }}>
+                    {user.billingTier === 'complimentary'
+                      ? '∞'
+                      : formatBalanceHours(user.balanceSeconds || 0)}
+                  </Box>
+                  {' '}balance
+                </Typography>
+                <Typography variant="bodyText" sx={{ fontSize: '0.8rem', color: 'text.secondary', fontStyle: 'normal' }}>
                   <Box component="span" sx={{ color: 'primary.main', fontWeight: 600 }}>{user.totalSessions}</Box>
                   {' '}sessions
                 </Typography>
@@ -255,6 +323,22 @@ const AdminUsersTab: React.FC<AdminUsersTabProps> = ({ accessToken, currentUserI
                     {user.sessionCode}
                   </Typography>
                 )}
+              </Box>
+
+              <Box sx={{ mb: 1.25 }}>
+                <Typography
+                  variant="bodyText"
+                  sx={{
+                    display: 'block',
+                    mb: 0.5,
+                    fontSize: '0.75rem',
+                    color: 'text.secondary',
+                    fontStyle: 'normal',
+                  }}
+                >
+                  Billing
+                </Typography>
+                {renderBillingControls(user)}
               </Box>
 
               {user.lastActiveAt && (
@@ -293,6 +377,8 @@ const AdminUsersTab: React.FC<AdminUsersTabProps> = ({ accessToken, currentUserI
                   </TableSortLabel>
                 </TableCell>
                 <TableCell>Code</TableCell>
+                <TableCell align="right">Balance</TableCell>
+                <TableCell>Billing</TableCell>
                 <TableCell>Status</TableCell>
                 <TableCell align="right">Actions</TableCell>
               </TableRow>
@@ -311,6 +397,12 @@ const AdminUsersTab: React.FC<AdminUsersTabProps> = ({ accessToken, currentUserI
                       '—'
                     )}
                   </TableCell>
+                  <TableCell align="right">
+                    {user.billingTier === 'complimentary'
+                      ? '∞'
+                      : formatBalanceHours(user.balanceSeconds || 0)}
+                  </TableCell>
+                  <TableCell>{renderBillingControls(user)}</TableCell>
                   <TableCell>
                     <Chip
                       label={user.isActive ? 'Active' : 'Inactive'}

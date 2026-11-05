@@ -10,19 +10,60 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  Tooltip,
 } from '@mui/material'
 import Typography from '../UI/Typography'
 import { adminService, LiveConnectionGroup } from '../../services/adminService'
 import { AdminDataCard, AdminTabHeader, useAdminMobile } from './adminShared'
+import { createHybridFlagElement } from '../../utils/flagEmojiUtils.tsx'
+import { getCTLanguageInfo, normalizeSavedCTLanguage } from '../../enums/googleCTLangs'
+import { resolveSTTLanguageInfo } from '../../enums/sttLanguages'
 
 interface AdminLiveTabProps {
   accessToken: string
 }
 
+function languageDisplayName(lang: string): string {
+  const ctLanguage = normalizeSavedCTLanguage(lang)
+  if (ctLanguage) return getCTLanguageInfo(ctLanguage).name
+  const sttInfo = resolveSTTLanguageInfo(lang)
+  return sttInfo.name !== 'Unknown' ? sttInfo.name : lang
+}
+
+const LanguageFlags: React.FC<{ languages: string[] }> = ({ languages }) => {
+  if (languages.length === 0) {
+    return (
+      <Typography variant="bodyText" sx={{ color: 'text.secondary', fontSize: '0.8rem', fontStyle: 'normal' }}>
+        —
+      </Typography>
+    )
+  }
+
+  return (
+    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, alignItems: 'center' }}>
+      {languages.map((lang) => (
+        <Tooltip key={lang} title={languageDisplayName(lang)} arrow>
+          <Chip
+            size="small"
+            variant="outlined"
+            color="primary"
+            label={
+              <Box sx={{ display: 'flex', alignItems: 'center', lineHeight: 1 }}>
+                {createHybridFlagElement(lang, 16)}
+              </Box>
+            }
+            sx={{ '& .MuiChip-label': { px: 0.75, py: 0.25 } }}
+          />
+        </Tooltip>
+      ))}
+    </Box>
+  )
+}
+
 const AdminLiveTab: React.FC<AdminLiveTabProps> = ({ accessToken }) => {
   const isMobile = useAdminMobile()
   const [groups, setGroups] = useState<LiveConnectionGroup[]>([])
-  const [totalConnections, setTotalConnections] = useState(0)
+  const [totalListeners, setTotalListeners] = useState(0)
   const [streamingCount, setStreamingCount] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -31,7 +72,11 @@ const AdminLiveTab: React.FC<AdminLiveTabProps> = ({ accessToken }) => {
     try {
       const data = await adminService.getLiveConnections(accessToken)
       setGroups(data.groups)
-      setTotalConnections(data.totalConnections)
+      const listeners =
+        typeof data.totalListeners === 'number'
+          ? data.totalListeners
+          : data.groups.reduce((sum, g) => sum + (g.listenerCount || 0), 0)
+      setTotalListeners(listeners)
       setStreamingCount(data.streamingCount)
       setError(null)
     } catch (err) {
@@ -58,7 +103,7 @@ const AdminLiveTab: React.FC<AdminLiveTabProps> = ({ accessToken }) => {
   return (
     <Box>
       <AdminTabHeader
-        subtitle={`${totalConnections} connections · ${streamingCount} streaming · refreshes every 10s`}
+        subtitle={`${totalListeners} listeners · ${streamingCount} streaming · refreshes every 10s`}
         onRefresh={load}
         refreshLabel="Refresh live connections"
       />
@@ -90,21 +135,11 @@ const AdminLiveTab: React.FC<AdminLiveTabProps> = ({ accessToken }) => {
               <Typography variant="bodyText" sx={{ fontSize: '0.875rem', mb: 1, wordBreak: 'break-all', fontStyle: 'normal' }}>
                 {g.speakerEmail || 'No speaker email'}
               </Typography>
-              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5 }}>
-                <Typography variant="bodyText" sx={{ fontSize: '0.8rem', color: 'text.secondary', fontStyle: 'normal' }}>
-                  <Box component="span" sx={{ color: 'primary.main', fontWeight: 600 }}>{g.listenerCount}</Box>
-                  {' '}listeners
-                </Typography>
-                <Typography variant="bodyText" sx={{ fontSize: '0.8rem', color: 'text.secondary', fontStyle: 'normal' }}>
-                  <Box component="span" sx={{ color: 'primary.main', fontWeight: 600 }}>{g.connectionCount}</Box>
-                  {' '}connections
-                </Typography>
-              </Box>
-              {g.languages.length > 0 && (
-                <Typography variant="bodyText" sx={{ color: 'text.secondary', display: 'block', mt: 1, fontSize: '0.75rem', opacity: 0.7, fontStyle: 'normal' }}>
-                  {g.languages.join(', ')}
-                </Typography>
-              )}
+              <Typography variant="bodyText" sx={{ fontSize: '0.8rem', color: 'text.secondary', fontStyle: 'normal', mb: 1 }}>
+                <Box component="span" sx={{ color: 'primary.main', fontWeight: 600 }}>{g.listenerCount}</Box>
+                {' '}listeners
+              </Typography>
+              <LanguageFlags languages={g.languages} />
             </AdminDataCard>
           ))}
         </Box>
@@ -117,7 +152,6 @@ const AdminLiveTab: React.FC<AdminLiveTabProps> = ({ accessToken }) => {
                 <TableCell>Speaker</TableCell>
                 <TableCell>Streaming</TableCell>
                 <TableCell align="right">Listeners</TableCell>
-                <TableCell align="right">Connections</TableCell>
                 <TableCell>Languages</TableCell>
               </TableRow>
             </TableHead>
@@ -136,9 +170,8 @@ const AdminLiveTab: React.FC<AdminLiveTabProps> = ({ accessToken }) => {
                     />
                   </TableCell>
                   <TableCell align="right">{g.listenerCount}</TableCell>
-                  <TableCell align="right">{g.connectionCount}</TableCell>
                   <TableCell>
-                    {g.languages.length > 0 ? g.languages.join(', ') : '—'}
+                    <LanguageFlags languages={g.languages} />
                   </TableCell>
                 </TableRow>
               ))}

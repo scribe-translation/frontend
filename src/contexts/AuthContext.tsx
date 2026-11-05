@@ -12,6 +12,9 @@ interface User {
   totpEnabled?: boolean
   totalSessions?: number
   totalUsageMinutes?: number
+  balanceSeconds?: number
+  billingTier?: string
+  preferredCurrency?: string
   isAdmin?: boolean
 }
 

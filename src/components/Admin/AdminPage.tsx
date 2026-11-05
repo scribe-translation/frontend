@@ -19,6 +19,7 @@ import AdminUsersTab from './AdminUsersTab'
 import AdminLiveTab from './AdminLiveTab'
 import AdminHistoryTab from './AdminHistoryTab'
 import AdminSettingsTab from './AdminSettingsTab'
+import AdminApplicationsTab from './AdminApplicationsTab'
 
 interface TabPanelProps {
   children?: React.ReactNode
@@ -35,7 +36,7 @@ function TabPanel(props: TabPanelProps) {
   )
 }
 
-const TABS = ['Overview', 'Users', 'Live', 'History', 'Settings'] as const
+const TABS = ['Overview', 'Users', 'Applications', 'Live', 'History', 'Settings'] as const
 
 const AdminPage: React.FC = () => {
   const [tabValue, setTabValue] = useState(0)
@@ -136,12 +137,15 @@ const AdminPage: React.FC = () => {
             <AdminUsersTab accessToken={tokens.accessToken} currentUserId={user.id} />
           </TabPanel>
           <TabPanel value={tabValue} index={2}>
-            <AdminLiveTab accessToken={tokens.accessToken} />
+            <AdminApplicationsTab accessToken={tokens.accessToken} />
           </TabPanel>
           <TabPanel value={tabValue} index={3}>
-            <AdminHistoryTab accessToken={tokens.accessToken} />
+            <AdminLiveTab accessToken={tokens.accessToken} />
           </TabPanel>
           <TabPanel value={tabValue} index={4}>
+            <AdminHistoryTab accessToken={tokens.accessToken} />
+          </TabPanel>
+          <TabPanel value={tabValue} index={5}>
             <AdminSettingsTab accessToken={tokens.accessToken} />
           </TabPanel>
         </Box>

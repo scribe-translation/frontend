@@ -23,6 +23,7 @@ import AccessTimeIcon from '@mui/icons-material/AccessTime'
 import SecurityIcon from '@mui/icons-material/Security'
 import Typography from '../UI/Typography'
 import TOTPSetupModal from './TOTPSetupModal'
+import BillingSection from './BillingSection'
 import { useAuth } from '../../contexts/AuthContext'
 
 interface StatCardProps {
@@ -69,6 +70,9 @@ interface User {
   totpEnabled?: boolean
   totalSessions?: number
   totalUsageMinutes?: number
+  balanceSeconds?: number
+  billingTier?: string
+  preferredCurrency?: string
 }
 
 interface ProfileContentProps {
@@ -318,6 +322,12 @@ const ProfileContent: React.FC<ProfileContentProps> = ({ user }) => {
           )}
         </Box>
         
+        <Divider sx={{ margin: '0.5rem 0' }} />
+
+        <BillingSection />
+
+        <Divider sx={{ margin: '0.5rem 0' }} />
+
         <Box>
           <Typography variant="sectionHeader" sx={{ marginBottom: '0.5rem' }}>
             Security Settings

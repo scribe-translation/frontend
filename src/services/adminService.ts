@@ -20,6 +20,9 @@ export interface AdminUser {
   totalSessions: number
   lastActiveAt?: string | null
   createdAt?: string | null
+  balanceSeconds?: number
+  billingTier?: 'standard' | 'complimentary' | 'discount'
+  preferredCurrency?: 'cad' | 'usd'
 }
 
 export interface LiveConnection {
@@ -116,18 +119,46 @@ export const adminService = {
   patchUser: (
     token: string,
     userId: string,
-    body: { isActive?: boolean; clearSessionCode?: boolean; confirm?: boolean }
+    body: {
+      isActive?: boolean
+      clearSessionCode?: boolean
+      confirm?: boolean
+      billingTier?: 'standard' | 'complimentary' | 'discount'
+    }
   ) =>
     adminFetch<{ user: AdminUser; message: string }>(`/admin/users/${userId}`, token, {
       method: 'PATCH',
       body: JSON.stringify(body),
     }),
 
+  getApplications: (token: string, status?: string) => {
+    const qs = status ? `?status=${encodeURIComponent(status)}` : ''
+    return adminFetch<{ applications: import('./billingService').DiscountApplication[] }>(
+      `/admin/applications${qs}`,
+      token
+    )
+  },
+
+  reviewApplication: (
+    token: string,
+    applicationId: string,
+    status: 'complimentary' | 'discount' | 'declined'
+  ) =>
+    adminFetch<{ application: import('./billingService').DiscountApplication; message: string }>(
+      `/admin/applications/${applicationId}`,
+      token,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ status }),
+      }
+    ),
+
   getLiveConnections: (token: string) =>
     adminFetch<{
       connections: LiveConnection[]
       groups: LiveConnectionGroup[]
       totalConnections: number
+      totalListeners: number
       streamingCount: number
     }>('/admin/live-connections', token),
 

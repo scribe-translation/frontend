@@ -18,6 +18,7 @@ import LogoutIcon from '@mui/icons-material/Logout'
 import QrCodeIcon from '@mui/icons-material/QrCode'
 import AccountBoxIcon from '@mui/icons-material/AccountBox';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
+import AccessTimeIcon from '@mui/icons-material/AccessTime';
 import DescriptionIcon from '@mui/icons-material/Description';
 import SaveIcon from '@mui/icons-material/Save';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
@@ -32,6 +33,10 @@ import { AudienceQrCode, downloadAudienceQr } from './AudienceQrCode'
 import { useSessionCode } from '../../contexts/SessionContext'
 // ProfileModal removed in favor of full page /profile
 import googleSpeechService from '../../services/googleSpeechService'
+import {
+  billingService,
+  formatBalanceHoursMinutes,
+} from '../../services/billingService'
 import { setCookie } from '../../utils/cookieUtils'
 import {
   loadSavedInputDevice,
@@ -387,6 +392,10 @@ function InputApp() {
   const [micAccessResetKey, setMicAccessResetKey] = useState(0)
   const [reconnectNotice, setReconnectNotice] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [balanceWarning, setBalanceWarning] = useState<string | null>(null)
+  const [paywallOpen, setPaywallOpen] = useState(false)
+  const [balanceSecondsLeft, setBalanceSecondsLeft] = useState<number | null>(null)
+  const [isComplimentaryBalance, setIsComplimentaryBalance] = useState(false)
   const [connectionQuality, setConnectionQuality] = useState<'good' | 'unstable' | 'disconnected'>('good')
   const socketRef = React.useRef<Socket | null>(null)
   const timeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -446,6 +455,47 @@ function InputApp() {
       }
     }
   }, [tokens, user, sessionCode, setSessionCode])
+
+  useEffect(() => {
+    if (!tokens?.accessToken) return
+    let cancelled = false
+    billingService
+      .getBalance(tokens.accessToken)
+      .then((balance) => {
+        if (cancelled) return
+        if (balance.complimentary) {
+          setIsComplimentaryBalance(true)
+          setBalanceSecondsLeft(null)
+        } else {
+          setIsComplimentaryBalance(false)
+          setBalanceSecondsLeft(balance.balanceSeconds)
+        }
+      })
+      .catch(() => {
+        if (cancelled || !user) return
+        if (user.billingTier === 'complimentary') {
+          setIsComplimentaryBalance(true)
+          setBalanceSecondsLeft(null)
+        } else if (typeof user.balanceSeconds === 'number') {
+          setIsComplimentaryBalance(false)
+          setBalanceSecondsLeft(user.balanceSeconds)
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [tokens?.accessToken, user])
+
+  const balanceLabel = isComplimentaryBalance
+    ? 'Unlimited'
+    : balanceSecondsLeft === null
+      ? null
+      : formatBalanceHoursMinutes(balanceSecondsLeft)
+  const balanceLow =
+    !isComplimentaryBalance &&
+    typeof balanceSecondsLeft === 'number' &&
+    balanceSecondsLeft > 0 &&
+    balanceSecondsLeft <= 10 * 60
 
   useEffect(() => {
     if (tokens && sessionCode) {
@@ -716,6 +766,51 @@ function InputApp() {
 
     socketRef.current.on('error', (error) => {
       console.error('❌ Socket error:', error)
+      const code = (error as { code?: string })?.code
+      const message = (error as { message?: string })?.message
+      if (code === 'BALANCE_DEPLETED' || message?.includes('Prepaid hours depleted')) {
+        setShouldBeListening(false)
+        setIsTranslating(false)
+        setAudioLevel(0)
+        try {
+          googleSpeechService.stopRecognition()
+        } catch {
+          /* ignore */
+        }
+        setPaywallOpen(true)
+      }
+    })
+
+    socketRef.current.on('balanceUpdate', (data: { balanceSeconds?: number; complimentary?: boolean }) => {
+      if (data.complimentary) {
+        setIsComplimentaryBalance(true)
+        setBalanceSecondsLeft(null)
+      } else if (typeof data.balanceSeconds === 'number') {
+        setIsComplimentaryBalance(false)
+        setBalanceSecondsLeft(data.balanceSeconds)
+      }
+    })
+
+    socketRef.current.on('balanceWarning', (data: { balanceSeconds?: number; thresholdSeconds?: number }) => {
+      const mins = Math.max(1, Math.ceil((data.balanceSeconds || 0) / 60))
+      setBalanceWarning(`About ${mins} minute${mins === 1 ? '' : 's'} of prepaid time left.`)
+      if (typeof data.balanceSeconds === 'number') {
+        setBalanceSecondsLeft(data.balanceSeconds)
+      }
+    })
+
+    socketRef.current.on('balanceDepleted', () => {
+      setShouldBeListening(false)
+      setIsTranslating(false)
+      setAudioLevel(0)
+      setBalanceSecondsLeft(0)
+      try {
+        googleSpeechService.stopRecognition()
+      } catch {
+        /* ignore */
+      }
+      socketRef.current?.emit('stopStreaming')
+      setPaywallOpen(true)
     })
 
     socketRef.current.on('tokenExpired', (data) => {
@@ -1188,6 +1283,34 @@ function InputApp() {
             </IconButton>
           </Box>
 
+          {balanceLabel !== null && (
+            <Box
+              onClick={() => navigate('/profile')}
+              sx={{
+                width: '100%',
+                minHeight: '56px',
+                backgroundColor: balanceLow ? '#6B4A3A' : '#435A73',
+                borderRadius: '14px',
+                display: 'flex',
+                alignItems: 'center',
+                padding: '10px 16px',
+                gap: '12px',
+                cursor: 'pointer',
+                '&:hover': { backgroundColor: balanceLow ? '#5A3D30' : '#3A5068' },
+              }}
+            >
+              <AccessTimeIcon sx={{ color: balanceLow ? '#FFCC80' : '#AFC6DD', fontSize: 26 }} />
+              <Box sx={{ minWidth: 0 }}>
+                <Typography sx={{ color: balanceLow ? '#FFCC80' : '#AFC6DD', fontSize: '11px', fontWeight: 500, lineHeight: 1.2 }}>
+                  Time remaining
+                </Typography>
+                <Typography sx={{ color: balanceLow ? '#FFE0B2' : '#D7E4F2', fontSize: '18px', fontWeight: 700, lineHeight: 1.2 }}>
+                  {isComplimentaryBalance ? 'Unlimited' : balanceLabel}
+                </Typography>
+              </Box>
+            </Box>
+          )}
+
           {/* Second Row: Settings Toggle & Play/Stop */}
           <Box sx={{ display: 'flex', gap: '8px', width: '100%' }}>
             <Box 
@@ -1256,9 +1379,10 @@ function InputApp() {
 
           <Collapse in={settingsExpanded}>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: '8px', mt: '4px' }}>
-              <RecordingPreferences 
-                recordingPrefs={recordingPrefs} 
-                setRecordingPrefs={setRecordingPrefs} 
+              <RecordingPreferences
+                recordingPrefs={recordingPrefs}
+                setRecordingPrefs={setRecordingPrefs}
+                alwaysExpanded
               />
               <Box sx={{ backgroundColor: 'rgba(255, 255, 255, 0.05)', borderRadius: '1rem', padding: '1rem' }}>
                 <DeviceSelector
@@ -1342,6 +1466,63 @@ function InputApp() {
               <LogoutIcon />
             </IconButton>
           </Box>
+          {balanceLabel !== null && (
+            <Tooltip title="View billing in Profile" arrow placement="bottom">
+              <Box
+                onClick={() => navigate('/profile')}
+                sx={{
+                  mt: 1.5,
+                  mb: 0.5,
+                  width: '100%',
+                  minHeight: '4rem',
+                  px: 2,
+                  py: 1.5,
+                  borderRadius: '1rem',
+                  backgroundColor: balanceLow
+                    ? 'rgba(255, 152, 0, 0.14)'
+                    : 'rgba(255, 255, 255, 0.05)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 1.5,
+                  cursor: 'pointer',
+                  transition: 'background-color 0.15s ease',
+                  '&:hover': {
+                    backgroundColor: balanceLow
+                      ? 'rgba(255, 152, 0, 0.2)'
+                      : 'rgba(255, 255, 255, 0.09)',
+                  },
+                }}
+              >
+                <AccessTimeIcon
+                  sx={{
+                    fontSize: 32,
+                    color: balanceLow ? 'warning.main' : 'primary.main',
+                    flexShrink: 0,
+                  }}
+                />
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography
+                    variant="captionText"
+                    sx={{ display: 'block', fontSize: '0.75rem', opacity: 0.75, lineHeight: 1.2 }}
+                  >
+                    Time remaining
+                  </Typography>
+                  <Typography
+                    variant="bodyText"
+                    sx={{
+                      display: 'block',
+                      fontSize: '1.35rem',
+                      fontWeight: 700,
+                      lineHeight: 1.2,
+                      color: balanceLow ? 'warning.main' : 'text.primary',
+                    }}
+                  >
+                    {isComplimentaryBalance ? 'Unlimited' : balanceLabel}
+                  </Typography>
+                </Box>
+              </Box>
+            </Tooltip>
+          )}
           <ConnectionDisplay isMobile={isMobile}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
@@ -1703,6 +1884,23 @@ function InputApp() {
         </Alert>
       </Snackbar>
 
+      <Snackbar
+        open={!!balanceWarning}
+        autoHideDuration={8000}
+        onClose={() => setBalanceWarning(null)}
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+        sx={{ top: { xs: 70, sm: 24 } }}
+      >
+        <Alert
+          severity="warning"
+          variant="filled"
+          sx={{ borderRadius: '1rem' }}
+          onClose={() => setBalanceWarning(null)}
+        >
+          {balanceWarning}
+        </Alert>
+      </Snackbar>
+
       {/* Connection quality warning */}
       <Snackbar
         open={connectionQuality === 'unstable'}
@@ -1717,6 +1915,36 @@ function InputApp() {
           Connection unstable - attempting to recover...
         </Alert>
       </Snackbar>
+
+      <Dialog
+        open={paywallOpen}
+        onClose={() => setPaywallOpen(false)}
+        fullWidth
+        maxWidth="xs"
+      >
+        <DialogTitle>Prepaid hours used up</DialogTitle>
+        <DialogContent>
+          <Typography variant="bodyText" sx={{ mb: 1 }}>
+            Your prepaid hours have run out
+            {balanceSecondsLeft === 0 ? '' : ''}. Purchase another bundle to keep translating.
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setPaywallOpen(false)} color="inherit" sx={{ borderRadius: '1rem' }}>
+            Close
+          </Button>
+          <Button
+            variant="contained"
+            sx={{ borderRadius: '1rem' }}
+            onClick={() => {
+              setPaywallOpen(false)
+              navigate('/profile')
+            }}
+          >
+            Buy hours
+          </Button>
+        </DialogActions>
+      </Dialog>
     </MainContainer>
   )
 }
